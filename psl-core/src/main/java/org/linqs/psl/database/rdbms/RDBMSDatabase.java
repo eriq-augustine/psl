@@ -56,6 +56,9 @@ import com.healthmarketscience.sqlbuilder.QueryPreparer;
 import com.healthmarketscience.sqlbuilder.SelectQuery;
 import com.healthmarketscience.sqlbuilder.UpdateQuery;
 import com.healthmarketscience.sqlbuilder.DeleteQuery;
+import org.json.simple.JSONArray;
+import org.json.simple.JSONObject;
+import org.json.simple.JSONValue;
 import org.joda.time.DateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -335,7 +338,57 @@ public class RDBMSDatabase extends Database {
 
         log.trace(queryString);
 
+        // TEST -- For grounding experiments.
+        explain(queryString);
+
         return new RDBMSQueryResultIterable(queryString, projectionMap, orderedIndexes, orderedTypes);
+    }
+
+    /**
+     * TEST
+     * For grounding experiments.
+     */
+    private ExplainResult explain(String queryString) {
+        log.info("Begin EXPLAIN");
+
+        // TODO(eriq): Support H2.
+        queryString = "EXPLAIN (FORMAT JSON) " + queryString;
+
+        StringBuilder result = new StringBuilder();
+        try (
+            Connection connection = getConnection();
+            Statement statement = connection.createStatement();
+            ResultSet results = statement.executeQuery(queryString);
+        ) {
+            boolean hasResults = false;
+            while (results.next()) {
+                hasResults = true;
+                result.append(results.getString(1));
+            }
+
+            if (!hasResults) {
+                log.error(queryString);
+                throw new RuntimeException("No results from an EXPLAIN.");
+            }
+        } catch (SQLException ex) {
+            log.error(queryString);
+            throw new RuntimeException("Error EXPLAINing.", ex);
+        }
+
+        Object parsed = JSONValue.parse(result.toString());
+        if (!(parsed instanceof JSONArray)) {
+            throw new RuntimeException("EXPLAIN text in unexpected format. Expected JSON array, got: " + parsed.getClass().getName());
+        }
+
+        // TODO(eriq): Make more robust.
+        JSONObject plan = (JSONObject)((JSONObject)((JSONArray)parsed).get(0)).get("Plan");
+        double cost = ((Double)plan.get("Total Cost")).doubleValue();
+        long rows = ((Long)plan.get("Plan Rows")).longValue();
+
+        log.info("Estimated Cost: {}, Estimated Rows: {}", cost, rows);
+        log.info("End EXPLAIN");
+
+        return new ExplainResult(cost, rows);
     }
 
     private RDBMSResultList initQueryResults(Map<Variable, Integer> projectionMap, VariableTypeMap varTypes, int[] orderedIndexes, ConstantType[] orderedTypes) {
@@ -750,6 +803,16 @@ public class RDBMSDatabase extends Database {
                 }
                 connection = null;
             }
+        }
+    }
+
+    public static class ExplainResult {
+        public final double cost;
+        public final long rows;
+
+        public ExplainResult(double cost, long rows) {
+            this.cost = cost;
+            this.rows = rows;
         }
     }
 }

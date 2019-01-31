@@ -32,10 +32,14 @@ import org.linqs.psl.model.term.Variable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Queue;
 
 /**
  * Try to rewrite a grounding query to make it more efficient.
@@ -161,6 +165,65 @@ public class QueryRewriter {
 
         log.debug("Computed cost-based query rewrite for [{}]({}): [{}]({}).", baseFormula, baseCost, query, currentCost);
         return query;
+    }
+
+    /**
+     * TEST
+     * For experiments only.
+     * This is highly unoptimized (so many allocations).
+     */
+    public Set<Formula> allCandidates(Formula baseFormula) {
+        // Once validated, we know that the formula is a conjunction or single atom.
+        DatabaseQuery.validate(baseFormula);
+
+        Set<Formula> candidates = new HashSet<Formula>();
+
+        // The base formula is always a candidate.
+        candidates.add(baseFormula);
+
+        // Shortcut for priors (single atoms).
+        if (baseFormula instanceof Atom) {
+            return candidates;
+        }
+
+        Set<Atom> baseAtoms = baseFormula.getAtoms(new HashSet<Atom>());
+        Set<Atom> passthrough = filterBaseAtoms(baseAtoms);
+
+        Queue<List<Atom>> toExplore = new LinkedList<List<Atom>>();
+        toExplore.add(new ArrayList<Atom>(baseAtoms));
+
+        while (toExplore.size() > 0) {
+            List<Atom> iterationBase = toExplore.poll();
+
+            for (int i = 0; i < iterationBase.size(); i++) {
+                List<Atom> candidate = new ArrayList<Atom>(iterationBase);
+
+                if (!canRemove(candidate.get(i), new HashSet<Atom>(candidate))) {
+                    continue;
+                }
+
+                candidate.remove(i);
+
+                if (candidate.size() == 0) {
+                    continue;
+                }
+
+                toExplore.add(new ArrayList<Atom>(candidate));
+
+                candidate.addAll(passthrough);
+
+                Formula query = null;
+                if (candidate.size() == 1) {
+                    query = candidate.get(0);
+                } else {
+                    query = new Conjunction(candidate.toArray(new Formula[0]));
+                }
+
+                candidates.add(query);
+            }
+        }
+
+        return candidates;
     }
 
     private double estimateQuerySize(CostEstimator costEstimator, Set<Atom> atoms, Atom ignore, Map<Predicate, TableStats> tableStats, RDBMSDataStore dataStore) {

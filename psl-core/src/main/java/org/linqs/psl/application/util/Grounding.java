@@ -25,7 +25,9 @@ import org.linqs.psl.database.atom.AtomManager;
 import org.linqs.psl.database.rdbms.QueryRewriter;
 import org.linqs.psl.database.rdbms.RDBMSDataStore;
 import org.linqs.psl.model.Model;
+import org.linqs.psl.model.atom.Atom;
 import org.linqs.psl.model.formula.Formula;
+import org.linqs.psl.model.predicate.StandardPredicate;
 import org.linqs.psl.model.rule.GroundRule;
 import org.linqs.psl.model.rule.Rule;
 import org.linqs.psl.model.term.Constant;
@@ -37,8 +39,10 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Static utilities for common {@link Model}-grounding tasks.
@@ -90,6 +94,9 @@ public class Grounding {
      * @return the number of ground rules generated.
      */
     public static int groundAll(List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
+        // TEST
+        groundingExperiment(rules, atomManager, groundRuleStore);
+
         boolean rewrite = Config.getBoolean(REWRITE_QUERY_KEY, REWRITE_QUERY_DEFAULT);
         boolean serial = Config.getBoolean(SERIAL_KEY, SERIAL_DEFAULT);
 
@@ -147,6 +154,39 @@ public class Grounding {
         groundAllSerial(bypassRules, atomManager, groundRuleStore);
 
         return groundRuleStore.size() - initialSize;
+    }
+
+    /**
+     * TEST
+     */
+    public static void groundingExperiment(List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
+        assert(rules.size() == 1);
+        Rule rule = rules.get(0);
+
+        DataStore dataStore = atomManager.getDatabase().getDataStore();
+
+        QueryRewriter rewriter = new QueryRewriter();
+        Set<Formula> queries = rewriter.allCandidates(rule.getGroundingFormula());
+
+        log.info("Found {} candidate queries.", queries.size());
+
+        int i = 0;
+        for (Formula query : queries) {
+            log.info("Query {} -- Formula: {}", i, query);
+
+            int atomCount = 0;
+            for (Atom atom : query.getAtoms(new HashSet<Atom>())) {
+                if (atom.getPredicate() instanceof StandardPredicate) {
+                    atomCount++;
+                }
+            }
+
+            log.info("Query {} -- Atom Count: {}", i, atomCount);
+
+            groundParallel(query, rules, atomManager, groundRuleStore);
+
+            i++;
+        }
     }
 
     private static int groundParallel(Formula query, List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
