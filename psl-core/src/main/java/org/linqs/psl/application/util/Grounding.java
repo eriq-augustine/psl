@@ -184,6 +184,7 @@ public class Grounding {
             log.info("Query {} -- Atom Count: {}", i, atomCount);
 
             groundParallel(query, rules, atomManager, groundRuleStore);
+            groundRuleStore.removeGroundRules(rule);
 
             i++;
         }
