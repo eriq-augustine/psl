@@ -168,7 +168,6 @@ public class QueryRewriter {
     }
 
     /**
-     * TEST
      * For experiments only.
      * This is highly unoptimized (so many allocations).
      */

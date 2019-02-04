@@ -66,8 +66,13 @@ public class Grounding {
     public static final String SERIAL_KEY = CONFIG_PREFIX + ".serial";
     public static final boolean SERIAL_DEFAULT = false;
 
-    // TEST
-    public static final String EXPERIMENT_QUERY_KEY = "experiment.query";
+    public static final String EXPERIMENT_KEY = CONFIG_PREFIX + ".experiment";
+    public static final boolean EXPERIMENT_DEFAULT = false;
+
+    public static final String EXPERIMENT_RULE_KEY = CONFIG_PREFIX + ".experiment.rule";
+    public static final int EXPERIMENT_RULE_DEFAULT = 0;
+
+    public static final String EXPERIMENT_QUERY_KEY = CONFIG_PREFIX + ".experiment.query";
     public static final int EXPERIMENT_QUERY_DEFAULT = -1;
 
     // Static only.
@@ -100,9 +105,6 @@ public class Grounding {
      * @return the number of ground rules generated.
      */
     public static int groundAll(List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
-        // TEST
-        groundingExperiment(rules, atomManager, groundRuleStore);
-
         boolean rewrite = Config.getBoolean(REWRITE_QUERY_KEY, REWRITE_QUERY_DEFAULT);
         boolean serial = Config.getBoolean(SERIAL_KEY, SERIAL_DEFAULT);
 
@@ -163,11 +165,12 @@ public class Grounding {
     }
 
     /**
-     * TEST
+     * Experiment only.
+     * Run all the rewrites of a single rule (chosen by config options EXPERIMENT_*).
      */
     public static void groundingExperiment(List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
-        assert(rules.size() == 1);
-        Rule rule = rules.get(0);
+        int ruleIndex = Config.getInt(EXPERIMENT_RULE_KEY, EXPERIMENT_RULE_DEFAULT);
+        Rule rule = rules.get(ruleIndex);
 
         DataStore dataStore = atomManager.getDatabase().getDataStore();
 
@@ -217,7 +220,10 @@ public class Grounding {
             log.info("Query {} -- Formula: {}", queryToGround, query);
             log.info("Query {} -- Atom Count: {}", queryToGround, atomCount);
 
-            groundParallel(query, rules, atomManager, groundRuleStore);
+            List<Rule> tempRules = new ArrayList<Rule>();
+            tempRules.add(rule);
+
+            groundParallel(query, tempRules, atomManager, groundRuleStore);
         }
     }
 

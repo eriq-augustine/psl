@@ -17,6 +17,7 @@
  */
 package org.linqs.psl.database.rdbms;
 
+import org.linqs.psl.application.util.Grounding;
 import org.linqs.psl.config.Config;
 import org.linqs.psl.database.DataStore;
 import org.linqs.psl.database.Database;
@@ -338,14 +339,14 @@ public class RDBMSDatabase extends Database {
 
         log.trace(queryString);
 
-        // TEST -- For grounding experiments.
-        explain(queryString);
+        if (Config.getBoolean(Grounding.EXPERIMENT_KEY, Grounding.EXPERIMENT_DEFAULT)) {
+            explain(queryString);
+        }
 
         return new RDBMSQueryResultIterable(queryString, projectionMap, orderedIndexes, orderedTypes);
     }
 
     /**
-     * TEST
      * For grounding experiments.
      */
     private ExplainResult explain(String queryString) {

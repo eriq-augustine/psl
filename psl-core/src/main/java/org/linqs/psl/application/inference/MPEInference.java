@@ -20,6 +20,7 @@ package org.linqs.psl.application.inference;
 import org.linqs.psl.application.groundrulestore.GroundRuleStore;
 import org.linqs.psl.application.util.GroundRules;
 import org.linqs.psl.application.util.Grounding;
+import org.linqs.psl.config.Config;
 import org.linqs.psl.database.Database;
 import org.linqs.psl.database.atom.PersistedAtomManager;
 import org.linqs.psl.model.Model;
@@ -49,13 +50,15 @@ public class MPEInference extends InferenceApplication {
         atomManager = new PersistedAtomManager(db);
 
         log.info("Grounding out model.");
-        // TEST
-        // int groundCount = Grounding.groundAll(model, atomManager, groundRuleStore);
-        Grounding.groundingExperiment(model.getRules(), atomManager, groundRuleStore);
-        log.info("Grounding experiment complete. Skipping term gen.");
-        return;
 
-        /* TEST
+        if (Config.getBoolean(Grounding.EXPERIMENT_KEY, Grounding.EXPERIMENT_DEFAULT)) {
+            Grounding.groundingExperiment(model.getRules(), atomManager, groundRuleStore);
+            log.info("Grounding experiment complete. Skipping term gen.");
+            return;
+        }
+
+        int groundCount = Grounding.groundAll(model, atomManager, groundRuleStore);
+
         if (termStore instanceof ADMMTermStore) {
             ((ADMMTermStore)termStore).ensureVariableCapacity(atomManager.getCachedRVACount());
         }
@@ -64,16 +67,15 @@ public class MPEInference extends InferenceApplication {
         @SuppressWarnings("unchecked")
         int termCount = termGenerator.generateTerms(groundRuleStore, termStore);
         log.debug("Generated {} objective terms from {} ground rules.", termCount, groundCount);
-        */
     }
 
     @Override
     public void inference() {
-        // TEST
-        log.info("Skipping inference for grounding experiments.");
-        return;
+        if (Config.getBoolean(Grounding.EXPERIMENT_KEY, Grounding.EXPERIMENT_DEFAULT)) {
+            log.info("Skipping inference for grounding experiments.");
+            return;
+        }
 
-        /* TEST
         log.info("Beginning inference.");
         reasoner.optimize(termStore);
         log.info("Inference complete. Writing results to Database.");
@@ -81,6 +83,5 @@ public class MPEInference extends InferenceApplication {
         // Commits the RandomVariableAtoms back to the Database,
         ((PersistedAtomManager)atomManager).commitPersistedAtoms();
         log.info("Results committed to database.");
-        */
     }
 }
