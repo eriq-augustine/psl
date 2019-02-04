@@ -172,6 +172,9 @@ public class Grounding {
         int ruleIndex = Config.getInt(EXPERIMENT_RULE_KEY, EXPERIMENT_RULE_DEFAULT);
         Rule rule = rules.get(ruleIndex);
 
+        log.info("Grounding experiment total rules: {}", rules.size());
+        log.info("Grounding experiment on rule {} -- {}", ruleIndex, rule);
+
         DataStore dataStore = atomManager.getDatabase().getDataStore();
 
         QueryRewriter rewriter = new QueryRewriter();
