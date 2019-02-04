@@ -33,11 +33,13 @@ import org.linqs.psl.model.rule.Rule;
 import org.linqs.psl.model.term.Constant;
 import org.linqs.psl.model.term.Variable;
 import org.linqs.psl.util.Parallel;
+import org.linqs.psl.util.StringUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -63,6 +65,10 @@ public class Grounding {
      */
     public static final String SERIAL_KEY = CONFIG_PREFIX + ".serial";
     public static final boolean SERIAL_DEFAULT = false;
+
+    // TEST
+    public static final String EXPERIMENT_QUERY_KEY = "experiment.query";
+    public static final int EXPERIMENT_QUERY_DEFAULT = -1;
 
     // Static only.
     private Grounding() {}
@@ -168,11 +174,13 @@ public class Grounding {
         QueryRewriter rewriter = new QueryRewriter();
         Set<Formula> queries = rewriter.allCandidates(rule.getGroundingFormula());
 
-        log.info("Found {} candidate queries.", queries.size());
+        // Get a consistent ordering of all the queries.
+        List<String> queryKeys = new ArrayList<String>();
+        Map<String, Formula> queryMapping = new HashMap<String, Formula>();
+        Map<String, Integer> atomCounts = new HashMap<String, Integer>();
 
-        int i = 0;
         for (Formula query : queries) {
-            log.info("Query {} -- Formula: {}", i, query);
+            String key = StringUtils.sort(query.toString());
 
             int atomCount = 0;
             for (Atom atom : query.getAtoms(new HashSet<Atom>())) {
@@ -181,12 +189,35 @@ public class Grounding {
                 }
             }
 
-            log.info("Query {} -- Atom Count: {}", i, atomCount);
+            key = String.format("%03d -- %s", atomCount, key);
+
+            queryKeys.add(key);
+            queryMapping.put(key, query);
+            atomCounts.put(key, atomCount);
+        }
+
+        Collections.sort(queryKeys);
+        Collections.reverse(queryKeys);
+
+        log.info("Found {} candidate queries.", queries.size());
+
+        int queryToGround = Config.getInt(EXPERIMENT_QUERY_KEY, EXPERIMENT_QUERY_DEFAULT);
+        if (queryToGround != EXPERIMENT_QUERY_DEFAULT && queryToGround > queries.size()) {
+            throw new RuntimeException("Bad value for " + EXPERIMENT_QUERY_KEY + ", got: " + queryToGround);
+        }
+
+        if (queryToGround == EXPERIMENT_QUERY_DEFAULT) {
+            for (int i = 0; i < queryKeys.size(); i++) {
+                log.info("   {} -- {}", i, queryMapping.get(queryKeys.get(i)));
+            }
+        } else {
+            Formula query = queryMapping.get(queryKeys.get(queryToGround));
+            Integer atomCount = atomCounts.get(queryKeys.get(queryToGround));
+
+            log.info("Query {} -- Formula: {}", queryToGround, query);
+            log.info("Query {} -- Atom Count: {}", queryToGround, atomCount);
 
             groundParallel(query, rules, atomManager, groundRuleStore);
-            groundRuleStore.removeGroundRules(rule);
-
-            i++;
         }
     }
 
