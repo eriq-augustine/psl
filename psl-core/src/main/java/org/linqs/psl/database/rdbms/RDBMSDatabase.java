@@ -383,13 +383,14 @@ public class RDBMSDatabase extends Database {
 
         // TODO(eriq): Make more robust.
         JSONObject plan = (JSONObject)((JSONObject)((JSONArray)parsed).get(0)).get("Plan");
-        double cost = ((Double)plan.get("Total Cost")).doubleValue();
+        double totalCost = ((Double)plan.get("Total Cost")).doubleValue();
+        double startupCost = ((Double)plan.get("Startup Cost")).doubleValue();
         long rows = ((Long)plan.get("Plan Rows")).longValue();
 
-        log.info("Estimated Cost: {}, Estimated Rows: {}", cost, rows);
+        log.info("Estimated Cost: {}, Startup Cost: {}, Estimated Rows: {}", totalCost, startupCost, rows);
         log.info("End EXPLAIN");
 
-        return new ExplainResult(cost, rows);
+        return new ExplainResult(totalCost, startupCost, rows);
     }
 
     private RDBMSResultList initQueryResults(Map<Variable, Integer> projectionMap, VariableTypeMap varTypes, int[] orderedIndexes, ConstantType[] orderedTypes) {
@@ -808,11 +809,13 @@ public class RDBMSDatabase extends Database {
     }
 
     public static class ExplainResult {
-        public final double cost;
+        public final double totalCost;
+        public final double startupCost;
         public final long rows;
 
-        public ExplainResult(double cost, long rows) {
-            this.cost = cost;
+        public ExplainResult(double totalCost, double startupCost, long rows) {
+            this.startupCost = startupCost;
+            this.totalCost = totalCost;
             this.rows = rows;
         }
     }
