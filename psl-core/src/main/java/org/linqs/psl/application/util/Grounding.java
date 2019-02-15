@@ -69,11 +69,17 @@ public class Grounding {
     public static final String EXPERIMENT_KEY = CONFIG_PREFIX + ".experiment";
     public static final boolean EXPERIMENT_DEFAULT = false;
 
-    public static final String EXPERIMENT_RULE_KEY = CONFIG_PREFIX + ".experiment.rule";
-    public static final int EXPERIMENT_RULE_DEFAULT = 0;
+    /**
+     * The specific rules and rewrites to run.
+     * "rule:rewrite;...".
+     * QUERY_VIEW_ALL_VALUE value if you want to get all the rewrites printed.
+     */
+    public static final String EXPERIMENT_RULE_QUERIES_KEY = CONFIG_PREFIX + ".experiment.rulequeries";
+    public static final String EXPERIMENT_RULE_QUERIES_DEFAULT = "";
 
-    public static final String EXPERIMENT_QUERY_KEY = CONFIG_PREFIX + ".experiment.query";
-    public static final int EXPERIMENT_QUERY_DEFAULT = -1;
+    public static final String RULE_DELIM = "_";
+    public static final String QUERY_DELIM = ":";
+    public static final int QUERY_VIEW_ALL_VALUE = -1;
 
     // Static only.
     private Grounding() {}
@@ -166,18 +172,37 @@ public class Grounding {
 
     /**
      * Experiment only.
-     * Run all the rewrites of a single rule (chosen by config options EXPERIMENT_*).
+     * Run rewites of specific rules (chosen by EXPERIMENT_RULE_QUERIES_KEY).
      */
     public static void groundingExperiment(List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
-        int ruleIndex = Config.getInt(EXPERIMENT_RULE_KEY, EXPERIMENT_RULE_DEFAULT);
-        Rule rule = rules.get(ruleIndex);
+        String ruleQueriesString = Config.getString(EXPERIMENT_RULE_QUERIES_KEY, EXPERIMENT_RULE_QUERIES_DEFAULT);
+        String[] ruleQueries = ruleQueriesString.split(RULE_DELIM);
 
-        log.info("Grounding experiment total rules: {}", rules.size());
-        log.info("Grounding experiment on rule {} -- {}", ruleIndex, rule);
+        log.info("Grounding experiment total available rules: {}", rules.size());
+
+        if (ruleQueries.length == 0) {
+            return;
+        }
 
         DataStore dataStore = atomManager.getDatabase().getDataStore();
-
         QueryRewriter rewriter = new QueryRewriter();
+
+        for (String ruleQuery : ruleQueries) {
+            int[] values = StringUtils.splitInt(ruleQuery, QUERY_DELIM);
+            int ruleIndex = values[0];
+            int queryIndex = values[1];
+
+            Rule rule = rules.get(ruleIndex);
+
+            singleGroundingExperiment(rule, ruleIndex, queryIndex, atomManager, groundRuleStore, dataStore, rewriter);
+        }
+    }
+
+    private static void singleGroundingExperiment(Rule rule, int ruleIndex, int queryToGround,
+            AtomManager atomManager, GroundRuleStore groundRuleStore,
+            DataStore dataStore, QueryRewriter rewriter) {
+        log.info("Grounding experiment on rule {} -- {}", ruleIndex, rule);
+
         Set<Formula> queries = rewriter.allCandidates(rule.getGroundingFormula());
 
         // Get a consistent ordering of all the queries.
@@ -207,12 +232,11 @@ public class Grounding {
 
         log.info("Found {} candidate queries.", queries.size());
 
-        int queryToGround = Config.getInt(EXPERIMENT_QUERY_KEY, EXPERIMENT_QUERY_DEFAULT);
-        if (queryToGround != EXPERIMENT_QUERY_DEFAULT && queryToGround > queries.size()) {
-            throw new RuntimeException("Bad value for " + EXPERIMENT_QUERY_KEY + ", got: " + queryToGround);
+        if (queryToGround != QUERY_VIEW_ALL_VALUE && (queryToGround < 0 || queryToGround > queries.size())) {
+            throw new RuntimeException("Bad value for query (rewrite), got: " + queryToGround);
         }
 
-        if (queryToGround == EXPERIMENT_QUERY_DEFAULT) {
+        if (queryToGround == QUERY_VIEW_ALL_VALUE) {
             for (int i = 0; i < queryKeys.size(); i++) {
                 log.info("   {} -- {}", i, queryMapping.get(queryKeys.get(i)));
             }
