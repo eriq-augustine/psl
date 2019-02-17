@@ -38,7 +38,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Utilities to run operations in parallel.
- * The threads will be started up on the first call, and not shut down until the JVM shuts down.
+ * The threads will be started up on the first call (or initPool()), and not shut down until the JVM shuts down.
  * Since the thread pool (and CPU) is shared, only one task may be run in parallel at a time.
  */
 public final class Parallel {
@@ -52,7 +52,11 @@ public final class Parallel {
     private static boolean initialized = false;
 
     // Defer assignment until a request is actually made to let the config get initialized.
+    // Don't refer to directly, use getNumThreads() instead.
     private static int numThreads = -1;
+
+    // The number of jobs a single worker can have, managed internally.
+    private static final int WORKER_QUEUE_SIZE = 50;
 
     // Block putting work intot he pool until there are workers ready.
     private static BlockingQueue<Worker<?>> workerQueue;
@@ -61,6 +65,14 @@ public final class Parallel {
     private static List<Worker<?>> allWorkers;
 
     private static ExecutorService pool;
+
+    // Timing numbers used in all parallel methods.
+    // Allocating here instead of per-invocation allowes easier method decomposition.
+    // (Since we don't have to worry about allocating a wrapper to pass them around.)
+    private static long iterations = 0;
+    private static long parentWaitTimeMS = 0;
+    private static long workerWaitTimeMS = 0;
+    private static long workerWorkTimeMS = 0;
 
     /**
      * Objects that are specific to each thread.
@@ -130,51 +142,33 @@ public final class Parallel {
     }
 
     private static RunTimings countInternal(int start, int end, int increment) {
-        long iterations = 0;
-        long parentWaitTimeMS = 0;
-        long workerWaitTimeMS = 0;
-        long workerWorkTimeMS = 0;
+        resetTiming();
 
-        for (int i = start; i < end; i += increment) {
-            Worker<?> worker = null;
-            try {
-                // Will block if no workers are ready.
-                long time = System.currentTimeMillis();
-                worker = workerQueue.take();
-                parentWaitTimeMS += (System.currentTimeMillis() - time);
-                iterations++;
-            } catch (InterruptedException ex) {
-                throw new RuntimeException("Interrupted waiting for worker (" + i + ").");
-            }
+        int number = start;
 
-            if (worker.getException() != null) {
-                throw new RuntimeException("Exception on worker.", worker.getException());
-            }
+        while (number < end) {
+            Worker<?> worker = fetchOpenWorker();
 
             @SuppressWarnings("unchecked")
             Worker<Integer> intWorker = (Worker<Integer>)worker;
-            intWorker.setWork(i, new Integer(i));
-            pool.execute(intWorker);
-        }
 
-        for (int i = 0; i < numThreads; i++) {
-            try {
-                long time = System.currentTimeMillis();
-                Worker<?> worker = workerQueue.take();
-                parentWaitTimeMS += (System.currentTimeMillis() - time);
-
-                workerWaitTimeMS += worker.getWaitTime();
-                workerWorkTimeMS += worker.getWorkTime();
-
-                if (worker.getException() != null) {
-                    throw new RuntimeException("Exception on worker.", worker.getException());
+            for (int i = 0; i < WORKER_QUEUE_SIZE; i++) {
+                if (number >= end) {
+                    break;
                 }
-            } catch (InterruptedException ex) {
-                throw new RuntimeException("Interrupted waiting for worker (" + i + ").");
+
+                intWorker.addWork(number, new Integer(number));
+                number += increment;
+            }
+
+            if (intWorker.workQueuedCount() > 0) {
+                pool.execute(intWorker);
             }
         }
 
-        return new RunTimings(iterations, parentWaitTimeMS, workerWaitTimeMS, workerWorkTimeMS);
+        flushWorkerQueue();
+
+        return new RunTimings();
     }
 
     /**
@@ -193,39 +187,100 @@ public final class Parallel {
     }
 
     private static <T> RunTimings foreachInternal(Iterable<T> work) {
-        long iterations = 0;
-        long parentWaitTimeMS = 0;
-        long workerWaitTimeMS = 0;
-        long workerWorkTimeMS = 0;
+        resetTiming();
 
         int count = 0;
-        for (T job : work) {
-            Worker<?> worker = null;
-            try {
-                // Will block if no workers are ready.
-                long time = System.currentTimeMillis();
-                worker = workerQueue.take();
-                parentWaitTimeMS += (System.currentTimeMillis() - time);
-                iterations++;
-            } catch (InterruptedException ex) {
-                throw new RuntimeException("Interrupted waiting for worker (" + count + ").");
-            }
+        boolean hasWork = true;
+        Iterator<T> workIterator = work.iterator();
 
-            if (worker.getException() != null) {
-                throw new RuntimeException("Exception on worker.", worker.getException());
-            }
+        while (hasWork) {
+            Worker<?> worker = fetchOpenWorker();
 
             @SuppressWarnings("unchecked")
             Worker<T> typedWorker = (Worker<T>)worker;
-            typedWorker.setWork(count, job);
-            pool.execute(typedWorker);
 
-            count++;
+            for (int i = 0; i < WORKER_QUEUE_SIZE; i++) {
+                if (!workIterator.hasNext()) {
+                    hasWork = false;
+                    break;
+                }
+
+                typedWorker.addWork(count, workIterator.next());
+                count++;
+            }
+
+            if (typedWorker.workQueuedCount() > 0) {
+                pool.execute(typedWorker);
+            }
         }
 
-        // As workers finish, they will be added to the queue.
-        // We can wait for all the workers by emptying out the queue.
-        for (int i = 0; i < numThreads; i++) {
+        flushWorkerQueue();
+
+        return new RunTimings();
+    }
+
+    /**
+     * Init the thread pool and supporting structures.
+     */
+    public static synchronized void initPool() {
+        if (initialized) {
+            return;
+        }
+
+        // We can use an unbounded queue (no initial size given) since the parent
+        // thread is disciplined when giving out work.
+        workerQueue = new LinkedBlockingQueue<Worker<?>>();
+        allWorkers = new ArrayList<Worker<?>>(getNumThreads());
+
+        // We will make all the threads daemons, so the JVM shutdown will not be held up.
+        pool = Executors.newFixedThreadPool(getNumThreads(), new DaemonThreadFactory());
+
+        // Close the pool only at JVM shutdown.
+        Runtime.getRuntime().addShutdownHook(new Thread() {
+            @Override
+            public void run() {
+                Parallel.shutdown();
+            }
+        });
+
+        initialized = true;
+    }
+
+    /**
+     * Reset internal timings.
+     */
+    private static void resetTiming() {
+        iterations = 0;
+        parentWaitTimeMS = 0;
+        workerWaitTimeMS = 0;
+        workerWorkTimeMS = 0;
+    }
+
+    private static Worker<?> fetchOpenWorker() {
+        Worker<?> worker = null;
+        try {
+            // Will block if no workers are ready.
+            long time = System.currentTimeMillis();
+            worker = workerQueue.take();
+            parentWaitTimeMS += (System.currentTimeMillis() - time);
+            iterations++;
+        } catch (InterruptedException ex) {
+            throw new RuntimeException("Interrupted waiting for worker.");
+        }
+
+        if (worker.getException() != null) {
+            throw new RuntimeException("Exception on worker.", worker.getException());
+        }
+
+        return worker;
+    }
+
+    /**
+     * As workers finish, they will be added to the queue.
+     * We can wait for all the workers by emptying out the queue.
+     */
+    private static void flushWorkerQueue() {
+        for (int i = 0; i < getNumThreads(); i++) {
             try {
                 long time = System.currentTimeMillis();
                 Worker<?> worker = workerQueue.take();
@@ -241,35 +296,6 @@ public final class Parallel {
                 throw new RuntimeException("Interrupted waiting for worker (" + i + ").");
             }
         }
-
-        return new RunTimings(iterations, parentWaitTimeMS, workerWaitTimeMS, workerWorkTimeMS);
-    }
-
-    /**
-     * Init the thread pool and supporting structures.
-     */
-    private static synchronized void initPool() {
-        if (initialized) {
-            return;
-        }
-
-        // We can use an unbounded queue (no initial size given) since the parent
-        // thread is disciplined when giving out work.
-        workerQueue = new LinkedBlockingQueue<Worker<?>>();
-        allWorkers = new ArrayList<Worker<?>>(numThreads);
-
-        // We will make all the threads daemons, so the JVM shutdown will not be held up.
-        pool = Executors.newFixedThreadPool(numThreads, new DaemonThreadFactory());
-
-        // Close the pool only at JVM shutdown.
-        Runtime.getRuntime().addShutdownHook(new Thread() {
-            @Override
-            public void run() {
-                Parallel.shutdown();
-            }
-        });
-
-        initialized = true;
     }
 
     /**
@@ -281,11 +307,11 @@ public final class Parallel {
         workerQueue.clear();
         allWorkers.clear();
 
-        for (int i = 0; i < numThreads; i++) {
+        for (int i = 0; i < getNumThreads(); i++) {
             Worker<T> worker = null;
 
             // The base worker goes in last so we won't call copy() after init().
-            if (i == numThreads - 1) {
+            if (i == getNumThreads() - 1) {
                 worker = baseWorker;
             } else {
                 worker = baseWorker.copy();
@@ -336,18 +362,18 @@ public final class Parallel {
     public static abstract class Worker<T> implements Runnable, Cloneable {
         protected int id;
 
-        private int index;
         private long waitTimeMS;
         private long workTimeMS;
-        private T item;
+        private List<Integer> indexes;
+        private List<T> items;
         private Exception exception;
 
         public Worker() {
             this.id = -1;
-            this.index = -1;
             this.waitTimeMS = 0;
             this.workTimeMS = 0;
-            this.item = null;
+            this.indexes = new ArrayList<Integer>(WORKER_QUEUE_SIZE);
+            this.items = new ArrayList<T>(WORKER_QUEUE_SIZE);
             this.exception = null;
         }
 
@@ -394,23 +420,29 @@ public final class Parallel {
             return workTimeMS;
         }
 
+        public int workQueuedCount() {
+            return items.size();
+        }
+
         @Override
         public final void run() {
             try {
-                if (index == -1) {
-                    log.warn("Called run() without first calling setWork().");
+                if (indexes.size() == 0) {
+                    log.warn("Called run() without first calling addWork().");
                     return;
                 }
 
-                long time = System.currentTimeMillis();
-                work(index, item);
-                workTimeMS += (System.currentTimeMillis() - time);
+                for (int i = 0; i < items.size(); i++) {
+                    long time = System.currentTimeMillis();
+                    work(indexes.get(i), items.get(i));
+                    workTimeMS += (System.currentTimeMillis() - time);
+                }
             } catch (Exception ex) {
                 log.warn("Caught exception on worker: {}", id);
                 exception = ex;
             } finally {
-                index = -1;
-                item = null;
+                indexes.clear();
+                items.clear();
 
                 long time = System.currentTimeMillis();
                 freeWorker(this);
@@ -418,9 +450,9 @@ public final class Parallel {
             }
         }
 
-        public final void setWork(int index, T item) {
-            this.index = index;
-            this.item = item;
+        public final void addWork(int index, T item) {
+            this.indexes.add(index);
+            this.items.add(item);
         }
 
         /**
@@ -451,16 +483,16 @@ public final class Parallel {
         public final long workerWaitTimeMS;
         public final long workerWorkTimeMS;
 
-        public RunTimings(long iterations, long parentWaitTimeMS, long workerWaitTimeMS, long workerWorkTimeMS) {
-            this.iterations = iterations;
-            this.parentWaitTimeMS = parentWaitTimeMS;
-            this.workerWaitTimeMS = workerWaitTimeMS;
-            this.workerWorkTimeMS = workerWorkTimeMS;
+        public RunTimings() {
+            this.iterations = Parallel.iterations;
+            this.parentWaitTimeMS = Parallel.parentWaitTimeMS;
+            this.workerWaitTimeMS = Parallel.workerWaitTimeMS;
+            this.workerWorkTimeMS = Parallel.workerWorkTimeMS;
         }
 
         public String toString() {
             return String.format("Iterations: %d, Parent Wait Time: %d, Worker Wait Time: %d, Worker Work Time: %d",
-                    iterations, parentWaitTimeMS, workerWaitTimeMS, workerWorkTimeMS);
+                    this.iterations, this.parentWaitTimeMS, this.workerWaitTimeMS, this.workerWorkTimeMS);
         }
     }
 }
