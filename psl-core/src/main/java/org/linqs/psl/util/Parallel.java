@@ -56,7 +56,7 @@ public final class Parallel {
     private static int numThreads = -1;
 
     // The number of jobs a single worker can have, managed internally.
-    private static final int WORKER_QUEUE_SIZE = 50;
+    private static final int DEFAULT_WORKER_QUEUE_SIZE = 1;
 
     // Block putting work intot he pool until there are workers ready.
     private static BlockingQueue<Worker<?>> workerQueue;
@@ -119,9 +119,9 @@ public final class Parallel {
      * Inclusive with start, exclusive with end.
      * The caller is trusted to provide appropriate numbers.
      */
-    public synchronized static RunTimings count(int start, int end, int increment, Worker<Integer> baseWorker) {
-        initWorkers(baseWorker);
-        RunTimings timings = countInternal(start, end, increment);
+    public synchronized static RunTimings count(int start, int end, int increment, int workerQueueSize, Worker<Integer> baseWorker) {
+        initWorkers(baseWorker, workerQueueSize);
+        RunTimings timings = countInternal(start, end, increment, workerQueueSize);
         cleanupWorkers();
 
         return timings;
@@ -131,17 +131,24 @@ public final class Parallel {
      * Convenience count() that increments by 1.
      */
     public static RunTimings count(int start, int end, Worker<Integer> baseWorker) {
-        return count(start, end, 1, baseWorker);
+        return count(start, end, 1, DEFAULT_WORKER_QUEUE_SIZE, baseWorker);
+    }
+
+    /**
+     * Convenience count() that increments by 1.
+     */
+    public static RunTimings count(int start, int end, int workerQueueSize, Worker<Integer> baseWorker) {
+        return count(start, end, 1, workerQueueSize, baseWorker);
     }
 
     /**
      * Convenience count() that starts at 0 and increments by 1.
      */
     public static RunTimings count(int end, Worker<Integer> baseWorker) {
-        return count(0, end, 1, baseWorker);
+        return count(0, end, 1, DEFAULT_WORKER_QUEUE_SIZE, baseWorker);
     }
 
-    private static RunTimings countInternal(int start, int end, int increment) {
+    private static RunTimings countInternal(int start, int end, int increment, int workerQueueSize) {
         resetTiming();
 
         int number = start;
@@ -152,7 +159,7 @@ public final class Parallel {
             @SuppressWarnings("unchecked")
             Worker<Integer> intWorker = (Worker<Integer>)worker;
 
-            for (int i = 0; i < WORKER_QUEUE_SIZE; i++) {
+            for (int i = 0; i < workerQueueSize; i++) {
                 if (number >= end) {
                     break;
                 }
@@ -174,19 +181,32 @@ public final class Parallel {
     /**
      * Invoke a worker once for each item.
      */
-    public synchronized static <T> RunTimings foreach(Iterable<T> work, Worker<T> baseWorker) {
-        initWorkers(baseWorker);
-        RunTimings timings = foreachInternal(work);
+    public synchronized static <T> RunTimings foreach(Iterable<T> work, int  workerQueueSize, Worker<T> baseWorker) {
+        initWorkers(baseWorker, workerQueueSize);
+        RunTimings timings = foreachInternal(work, workerQueueSize);
         cleanupWorkers();
 
         return timings;
+    }
+
+    public static <T> RunTimings foreach(Iterable<T> work, Worker<T> baseWorker) {
+        int workerQueueSize = DEFAULT_WORKER_QUEUE_SIZE;
+        if (work instanceof List) {
+            workerQueueSize = Math.max(1, ((List)work).size() / getNumThreads());
+        }
+
+        return foreach(work, workerQueueSize, baseWorker);
     }
 
     public static <T> RunTimings foreach(Iterator<T> work, Worker<T> baseWorker) {
         return foreach(IteratorUtils.newIterable(work), baseWorker);
     }
 
-    private static <T> RunTimings foreachInternal(Iterable<T> work) {
+    public static <T> RunTimings foreach(Iterator<T> work, int workerQueueSize, Worker<T> baseWorker) {
+        return foreach(IteratorUtils.newIterable(work), workerQueueSize, baseWorker);
+    }
+
+    private static <T> RunTimings foreachInternal(Iterable<T> work, int workerQueueSize) {
         resetTiming();
 
         int count = 0;
@@ -199,7 +219,7 @@ public final class Parallel {
             @SuppressWarnings("unchecked")
             Worker<T> typedWorker = (Worker<T>)worker;
 
-            for (int i = 0; i < WORKER_QUEUE_SIZE; i++) {
+            for (int i = 0; i < workerQueueSize; i++) {
                 if (!workIterator.hasNext()) {
                     hasWork = false;
                     break;
@@ -301,8 +321,12 @@ public final class Parallel {
     /**
      * Always the first thing called when setting up to run a task in parallel.
      */
-    private static <T> void initWorkers(Worker<T> baseWorker) {
+    private static <T> void initWorkers(Worker<T> baseWorker, int workerQueueSize) {
         initPool();
+
+        if (workerQueueSize <= 0) {
+            throw new RuntimeException("Worker queue size must be positive, got: " + workerQueueSize + ".");
+        }
 
         workerQueue.clear();
         allWorkers.clear();
@@ -317,7 +341,7 @@ public final class Parallel {
                 worker = baseWorker.copy();
             }
 
-            worker.init(i);
+            worker.init(i, workerQueueSize);
 
             allWorkers.add(worker);
             workerQueue.add(worker);
@@ -372,8 +396,8 @@ public final class Parallel {
             this.id = -1;
             this.waitTimeMS = 0;
             this.workTimeMS = 0;
-            this.indexes = new ArrayList<Integer>(WORKER_QUEUE_SIZE);
-            this.items = new ArrayList<T>(WORKER_QUEUE_SIZE);
+            this.indexes = new ArrayList<Integer>(DEFAULT_WORKER_QUEUE_SIZE);
+            this.items = new ArrayList<T>(DEFAULT_WORKER_QUEUE_SIZE);
             this.exception = null;
         }
 
@@ -382,6 +406,14 @@ public final class Parallel {
          * Called after all work has been complete and it is time to clean up.
          */
         public void close() {}
+
+        /**
+         * Cleanup anything between batches.
+         * Called after a batch of work has been complete.
+         * The size of the bath is determined by the set worker queue size.
+         * but may be less.
+         */
+        public void batchComplete() {}
 
         /**
          * Make a deep copy of this worker.
@@ -400,27 +432,30 @@ public final class Parallel {
          * Called before any work is given.
          * The id will be unique to this worker for this batch of work.
          */
-        public void init(int id) {
+        public final void init(int id, int capacity) {
             this.id = id;
+
+            ((ArrayList<Integer>)indexes).ensureCapacity(capacity);
+            ((ArrayList<T>)items).ensureCapacity(capacity);
         }
 
-        public void clearException() {
+        public final void clearException() {
             exception = null;
         }
 
-        public Exception getException() {
+        public final Exception getException() {
             return exception;
         }
 
-        public long getWaitTime() {
+        public final long getWaitTime() {
             return waitTimeMS;
         }
 
-        public long getWorkTime() {
+        public final long getWorkTime() {
             return workTimeMS;
         }
 
-        public int workQueuedCount() {
+        public final int workQueuedCount() {
             return items.size();
         }
 
@@ -437,6 +472,8 @@ public final class Parallel {
                     work(indexes.get(i), items.get(i));
                     workTimeMS += (System.currentTimeMillis() - time);
                 }
+
+                batchComplete();
             } catch (Exception ex) {
                 log.warn("Caught exception on worker: {}", id);
                 exception = ex;
