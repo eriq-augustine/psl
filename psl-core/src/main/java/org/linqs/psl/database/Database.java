@@ -23,12 +23,14 @@ import org.linqs.psl.model.atom.ObservedAtom;
 import org.linqs.psl.model.atom.QueryAtom;
 import org.linqs.psl.model.atom.RandomVariableAtom;
 import org.linqs.psl.model.formula.Formula;
+import org.linqs.psl.model.predicate.FunctionalPredicate;
 import org.linqs.psl.model.predicate.Predicate;
 import org.linqs.psl.model.predicate.StandardPredicate;
 import org.linqs.psl.model.term.Constant;
 import org.linqs.psl.model.term.Term;
 import org.linqs.psl.model.term.Variable;
 import org.linqs.psl.util.IteratorUtils;
+import org.linqs.psl.util.Parallel;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -86,6 +88,10 @@ import java.util.Set;
  * GroundAtoms with FunctionalPredicates.
  */
 public abstract class Database implements ReadableDatabase, WritableDatabase {
+    protected static final String THREAD_QUERY_ATOM_KEY = QueryAtom.class.getName();
+
+    public static final float DEFAULT_UNOBSERVED_VALUE = 0.0f;
+
     /**
      * The backing data store that created this database.
      * Connection are obtained from here.
@@ -139,6 +145,49 @@ public abstract class Database implements ReadableDatabase, WritableDatabase {
     }
 
     public abstract GroundAtom getAtom(StandardPredicate predicate, boolean create, Constant... arguments);
+
+    /**
+     * Get an atom, but only use the cache, ie don't query the database.
+     * Atoms will still be created, as per the getAtom() conventions.
+     */
+    public GroundAtom getCachedAtom(Predicate predicate, Constant... arguments) {
+        if (closed) {
+            throw new IllegalStateException("Cannot query atom from closed database.");
+        }
+
+        if (predicate instanceof StandardPredicate) {
+            return getCachedAtom((StandardPredicate)predicate, arguments);
+        } else if (predicate instanceof FunctionalPredicate) {
+            return getAtom((FunctionalPredicate)predicate, arguments);
+        } else {
+            throw new IllegalStateException("Unknown predicate type: " + predicate.getClass().toString());
+        }
+    }
+
+    public GroundAtom getCachedAtom(StandardPredicate predicate, Constant... arguments) {
+        // Only allocate one QueryAtom per thread.
+        QueryAtom queryAtom = null;
+        if (!Parallel.hasThreadObject(THREAD_QUERY_ATOM_KEY)) {
+            queryAtom = new QueryAtom(predicate, arguments);
+            Parallel.putThreadObject(THREAD_QUERY_ATOM_KEY, queryAtom);
+        } else {
+            queryAtom = (QueryAtom)(Parallel.getThreadObject(THREAD_QUERY_ATOM_KEY));
+            queryAtom.assume(predicate, arguments);
+        }
+
+        GroundAtom result = cache.getCachedAtom(queryAtom);
+        if (result != null) {
+            return result;
+        }
+
+        if (isClosed((StandardPredicate)predicate)) {
+            result = cache.instantiateObservedAtom(predicate, arguments, DEFAULT_UNOBSERVED_VALUE);
+        } else {
+            result = cache.instantiateRandomVariableAtom(predicate, arguments, DEFAULT_UNOBSERVED_VALUE);
+        }
+
+        return result;
+    }
 
     public boolean hasAtom(StandardPredicate predicate, Constant... arguments) {
         return getAtom(predicate, false, arguments) != null;

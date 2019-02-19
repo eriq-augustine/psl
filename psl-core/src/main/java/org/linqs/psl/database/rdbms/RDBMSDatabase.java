@@ -92,10 +92,6 @@ public class RDBMSDatabase extends Database {
     public static final String FETCH_SIZE_KEY = CONFIG_PREFIX + ".fetchsize";
     public static final int FETCH_SIZE_DEFAULT = 500;
 
-    private static final float DEFAULT_UNOBSERVED_VALUE = 0.0f;
-
-    private static final String THREAD_QUERY_ATOM_KEY = QueryAtom.class.getName();
-
     /**
      * Predicates that, for the purpose of this database, are closed.
      */
@@ -530,11 +526,11 @@ public class RDBMSDatabase extends Database {
     public GroundAtom getAtom(StandardPredicate predicate, boolean create, Constant... arguments) {
         // Only allocate one QueryAtom per thread.
         QueryAtom queryAtom = null;
-        if (!Parallel.hasThreadObject(THREAD_QUERY_ATOM_KEY)) {
+        if (!Parallel.hasThreadObject(Database.THREAD_QUERY_ATOM_KEY)) {
             queryAtom = new QueryAtom(predicate, arguments);
-            Parallel.putThreadObject(THREAD_QUERY_ATOM_KEY, queryAtom);
+            Parallel.putThreadObject(Database.THREAD_QUERY_ATOM_KEY, queryAtom);
         } else {
-            queryAtom = (QueryAtom)(Parallel.getThreadObject(THREAD_QUERY_ATOM_KEY));
+            queryAtom = (QueryAtom)(Parallel.getThreadObject(Database.THREAD_QUERY_ATOM_KEY));
             queryAtom.assume(predicate, arguments);
         }
 
@@ -554,15 +550,14 @@ public class RDBMSDatabase extends Database {
         ((RDBMSDataStore)parentDataStore).getPredicateInfo(predicate);
 
         GroundAtom result = queryDBForAtom(predicate, arguments);
-
         if (result != null || !create) {
             return result;
         }
 
         if (isClosed((StandardPredicate)predicate)) {
-            result = cache.instantiateObservedAtom(predicate, arguments, DEFAULT_UNOBSERVED_VALUE);
+            result = cache.instantiateObservedAtom(predicate, arguments, Database.DEFAULT_UNOBSERVED_VALUE);
         } else {
-            result = cache.instantiateRandomVariableAtom(predicate, arguments, DEFAULT_UNOBSERVED_VALUE);
+            result = cache.instantiateRandomVariableAtom(predicate, arguments, Database.DEFAULT_UNOBSERVED_VALUE);
         }
 
         return result;

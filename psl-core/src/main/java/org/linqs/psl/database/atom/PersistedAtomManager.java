@@ -123,7 +123,8 @@ public class PersistedAtomManager extends AtomManager {
     // then they will be responsible for synchronization.
     @Override
     public GroundAtom getAtom(Predicate predicate, Constant... arguments) {
-        GroundAtom atom = db.getAtom(predicate, arguments);
+        // Because all atoms are cached on construction, only the cached needs to be checked.
+        GroundAtom atom = db.getCachedAtom(predicate, arguments);
         if (!(atom instanceof RandomVariableAtom)) {
             return atom;
         }
