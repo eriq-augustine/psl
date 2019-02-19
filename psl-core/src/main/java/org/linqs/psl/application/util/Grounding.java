@@ -81,6 +81,8 @@ public class Grounding {
     public static final String QUERY_DELIM = ":";
     public static final int QUERY_VIEW_ALL_VALUE = -1;
 
+    public static final int PARALLEL_WORKER_QUEUE_SIZE = 1000;
+
     // Static only.
     private Grounding() {}
 
@@ -178,6 +180,8 @@ public class Grounding {
         String ruleQueriesString = Config.getString(EXPERIMENT_RULE_QUERIES_KEY, EXPERIMENT_RULE_QUERIES_DEFAULT);
         String[] ruleQueries = ruleQueriesString.split(RULE_DELIM);
 
+        Parallel.initPool();
+
         log.info("Grounding experiment total available rules: {}", rules.size());
 
         if (ruleQueries.length == 0) {
@@ -267,7 +271,7 @@ public class Grounding {
         int initialCount = groundRuleStore.size();
 
         // NOTE(eriq): For experiments, don't instantiate as we receive results in.
-        //  Instead, read them all into memory and then call the query complete.
+        //  Instead, read them all into memory and then call after the query complete.
         QueryResultIterable queryResults = atomManager.executeGroundingQuery(query);
         if (false) {
             Parallel.RunTimings timings = Parallel.foreach(queryResults, new GroundWorker(atomManager, groundRuleStore, queryResults.getVariableMap(), rules));
@@ -288,7 +292,7 @@ public class Grounding {
             log.info("Query Complete");
             log.trace("Got {} results from query [{}].", results.size(), query);
 
-            Parallel.foreach(results, new GroundWorker(atomManager, groundRuleStore, queryResults.getVariableMap(), rules));
+            Parallel.foreach(results, PARALLEL_WORKER_QUEUE_SIZE, new GroundWorker(atomManager, groundRuleStore, queryResults.getVariableMap(), rules));
         }
 
         int groundCount = groundRuleStore.size() - initialCount;
@@ -305,12 +309,16 @@ public class Grounding {
         private Map<Variable, Integer> variableMap;
         private List<Rule> rules;
 
+        private List<GroundRule> groundRules;
+
         public GroundWorker(AtomManager atomManager, GroundRuleStore groundRuleStore,
                 Map<Variable, Integer> variableMap, List<Rule> rules) {
             this.atomManager = atomManager;
             this.groundRuleStore = groundRuleStore;
             this.variableMap = variableMap;
             this.rules = rules;
+
+            groundRules = new ArrayList<GroundRule>(rules.size() * PARALLEL_WORKER_QUEUE_SIZE);
         }
 
         @Override
@@ -323,9 +331,18 @@ public class Grounding {
             for (Rule rule : rules) {
                 GroundRule groundRule = rule.ground(row, variableMap, atomManager);
                 if (groundRule != null) {
-                    groundRuleStore.addGroundRule(groundRule);
+                    groundRules.add(groundRule);
                 }
             }
+        }
+
+        /**
+         * Dump all the ground rules into the store.
+         */
+        @Override
+        public void batchComplete() {
+            groundRuleStore.addAllGroundRules(groundRules);
+            groundRules.clear();
         }
     }
 }

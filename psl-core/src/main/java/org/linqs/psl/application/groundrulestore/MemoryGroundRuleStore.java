@@ -24,6 +24,7 @@ import org.linqs.psl.model.rule.WeightedGroundRule;
 import org.linqs.psl.util.IteratorUtils;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
 
@@ -43,6 +44,11 @@ public class MemoryGroundRuleStore implements GroundRuleStore {
     @Override
     public synchronized void addGroundRule(GroundRule groundRule) {
         groundRules.add(groundRule);
+    }
+
+    @Override
+    public synchronized void addAllGroundRules(Collection<GroundRule> groundRules) {
+        this.groundRules.addAll(groundRules);
     }
 
     /**

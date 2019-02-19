@@ -23,6 +23,8 @@ import org.linqs.psl.model.rule.UnweightedGroundRule;
 import org.linqs.psl.model.rule.WeightedGroundRule;
 import org.linqs.psl.model.rule.WeightedRule;
 
+import java.util.Collection;
+
 /**
  * Container for a set of {@link GroundRule GroundRules}.
  * <p>
@@ -34,12 +36,17 @@ import org.linqs.psl.model.rule.WeightedRule;
 public interface GroundRuleStore {
     /**
      * Adds a GroundRule to this store.
-     * The behavior on what to do when a rule is already added is up tothe implementation.
+     * The behavior on what to do when a rule is already added is up to the implementation.
      * It may ignore it or throw an exception.
-     *
-     * @param rule the GroundRule to add
      */
     public void addGroundRule(GroundRule rule);
+
+    /**
+     * Adds several GroundRules to this store.
+     * The behavior on what to do when a rule is already added is up to the implementation.
+     * It may ignore it or throw an exception.
+     */
+    public void addAllGroundRules(Collection<GroundRule> rules);
 
     /**
      * Release any memory held by the store.
