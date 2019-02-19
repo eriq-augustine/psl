@@ -382,7 +382,8 @@ public class ADMMReasoner implements Reasoner {
             this.blockSize = blockSize;
         }
 
-        public Object clone() {
+        @Override
+        public Parallel.Worker<Integer> copy() {
             return new TermWorker(termStore, blockSize);
         }
 
@@ -414,7 +415,8 @@ public class ADMMReasoner implements Reasoner {
             this.blockSize = blockSize;
         }
 
-        public Object clone() {
+        @Override
+        public Parallel.Worker<Integer> copy() {
             return new VariableWorker(termStore, blockSize);
         }
 

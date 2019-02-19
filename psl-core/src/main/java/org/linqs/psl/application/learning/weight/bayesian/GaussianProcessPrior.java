@@ -203,7 +203,7 @@ public class GaussianProcessPrior extends WeightLearningApplication {
         }
 
         @Override
-        public Object clone() {
+        public Parallel.Worker<WeightConfig> copy() {
             return new ComputePredictionFunctionValueWorker();
         }
 

@@ -322,7 +322,7 @@ public class Grounding {
         }
 
         @Override
-        public Object clone() {
+        public Parallel.Worker<Constant[]> copy() {
             return new GroundWorker(atomManager, groundRuleStore, variableMap, rules);
         }
 

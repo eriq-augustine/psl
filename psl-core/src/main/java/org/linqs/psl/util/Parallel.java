@@ -210,10 +210,9 @@ public final class Parallel {
         resetTiming();
 
         int count = 0;
-        boolean hasWork = true;
         Iterator<T> workIterator = work.iterator();
 
-        while (hasWork) {
+        while (workIterator.hasNext()) {
             Worker<?> worker = fetchOpenWorker();
 
             @SuppressWarnings("unchecked")
@@ -221,7 +220,6 @@ public final class Parallel {
 
             for (int i = 0; i < workerQueueSize; i++) {
                 if (!workIterator.hasNext()) {
-                    hasWork = false;
                     break;
                 }
 
@@ -388,8 +386,14 @@ public final class Parallel {
 
         private long waitTimeMS;
         private long workTimeMS;
+        /**
+         * The queued items to work on.
+         * We will be very careful in this class to avoid unnecessary allocations while
+         * still maintining a distinct queue for each worker.
+         */
         private List<Integer> indexes;
         private List<T> items;
+
         private Exception exception;
 
         public Worker() {
@@ -415,17 +419,34 @@ public final class Parallel {
          */
         public void batchComplete() {}
 
-        /**
-         * Make a deep copy of this worker.
-         * Called when the manager is getting the correct number of workers ready.
-         */
-        @SuppressWarnings("unchecked")
-        public Worker<T> copy() {
+        @Override
+        protected final Object clone() {
+            Worker<T> newWorker;
+
             try {
-                return (Worker<T>)this.clone();
+                @SuppressWarnings("unchecked")
+                Worker<T> tempWorker = (Worker<T>)super.clone();
+                newWorker = tempWorker;
             } catch (CloneNotSupportedException ex) {
                 throw new RuntimeException("Either implement copy(), or support clone() for Workers.", ex);
             }
+
+            // Explicitly deep copy the work queue.
+            newWorker.indexes = new ArrayList<Integer>(DEFAULT_WORKER_QUEUE_SIZE);
+            newWorker.items = new ArrayList<T>(DEFAULT_WORKER_QUEUE_SIZE);
+
+            return newWorker;
+        }
+
+        /**
+         * Make a deep copy of this worker.
+         * Called when the manager is getting the correct number of workers ready.
+         * Children can override, just make sure that either clone() is used or the constructor is called.
+         */
+        public Worker<T> copy() {
+            @SuppressWarnings("unchecked")
+            Worker<T> worker = (Worker<T>)this.clone();
+            return worker;
         }
 
         /**
@@ -457,6 +478,11 @@ public final class Parallel {
 
         public final int workQueuedCount() {
             return items.size();
+        }
+
+        @Override
+        public String toString() {
+            return getClass().getName() + "::" + id;
         }
 
         @Override
