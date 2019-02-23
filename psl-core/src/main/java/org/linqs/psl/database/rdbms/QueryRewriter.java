@@ -28,6 +28,7 @@ import org.linqs.psl.model.predicate.GroundingOnlyPredicate;
 import org.linqs.psl.model.predicate.StandardPredicate;
 import org.linqs.psl.model.term.Term;
 import org.linqs.psl.model.term.Variable;
+import org.linqs.psl.util.IteratorUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -168,58 +169,57 @@ public class QueryRewriter {
     }
 
     /**
-     * For experiments only.
-     * This is highly unoptimized (so many allocations).
+     * Get all the valid candidate queries for a base query.
+     * Rules with more than 64 standard atoms will throw.
      */
-    public Set<Formula> allCandidates(Formula baseFormula) {
+    public List<Formula> allCandidates(Formula baseFormula) {
         // Once validated, we know that the formula is a conjunction or single atom.
         DatabaseQuery.validate(baseFormula);
 
-        Set<Formula> candidates = new HashSet<Formula>();
+        Set<Atom> baseAtoms = baseFormula.getAtoms(new HashSet<Atom>());
+        Set<Atom> passthroughAtoms = filterBaseAtoms(baseAtoms);
 
-        // The base formula is always a candidate.
-        candidates.add(baseFormula);
+        List<Atom> atoms = new ArrayList<Atom>(baseAtoms);
+        List<Formula> candidates = new ArrayList<Formula>((int)Math.pow(2, atoms.size()));
 
-        // Shortcut for priors (single atoms).
-        if (baseFormula instanceof Atom) {
-            return candidates;
+        Set<Variable> allVariables = new HashSet<Variable>();
+        Map<Atom, Set<Variable>> atomVariables = new HashMap<Atom, Set<Variable>>(atoms.size());
+        for (Atom atom : atoms) {
+            Set<Variable> variables = atom.getVariables();
+
+            allVariables.addAll(variables);
+            atomVariables.put(atom, variables);
         }
 
-        Set<Atom> baseAtoms = baseFormula.getAtoms(new HashSet<Atom>());
-        Set<Atom> passthrough = filterBaseAtoms(baseAtoms);
+        Set<Variable> usedVariables = new HashSet<Variable>(allVariables.size());
+        List<Atom> candidate = new ArrayList<Atom>(atoms.size());
 
-        Queue<List<Atom>> toExplore = new LinkedList<List<Atom>>();
-        toExplore.add(new ArrayList<Atom>(baseAtoms));
+        for (boolean[] activeAtoms : IteratorUtils.powerset(atoms.size())) {
+            usedVariables.clear();
+            candidate.clear();
 
-        while (toExplore.size() > 0) {
-            List<Atom> iterationBase = toExplore.poll();
-
-            for (int i = 0; i < iterationBase.size(); i++) {
-                List<Atom> candidate = new ArrayList<Atom>(iterationBase);
-
-                if (!canRemove(candidate.get(i), new HashSet<Atom>(candidate))) {
-                    continue;
+            for (int i = 0; i < atoms.size(); i++) {
+                if (activeAtoms[i]) {
+                    usedVariables.addAll(atomVariables.get(atoms.get(i)));
+                    candidate.add(atoms.get(i));
                 }
-
-                candidate.remove(i);
-
-                if (candidate.size() == 0) {
-                    continue;
-                }
-
-                toExplore.add(new ArrayList<Atom>(candidate));
-
-                candidate.addAll(passthrough);
-
-                Formula query = null;
-                if (candidate.size() == 1) {
-                    query = candidate.get(0);
-                } else {
-                    query = new Conjunction(candidate.toArray(new Formula[0]));
-                }
-
-                candidates.add(query);
             }
+
+            // If all variables were not covered.
+            if (usedVariables.size() != allVariables.size()) {
+                continue;
+            }
+
+            candidate.addAll(passthroughAtoms);
+
+            Formula query = null;
+            if (candidate.size() == 1) {
+                query = candidate.get(0);
+            } else {
+                query = new Conjunction(candidate.toArray(new Formula[0]));
+            }
+
+            candidates.add(query);
         }
 
         return candidates;

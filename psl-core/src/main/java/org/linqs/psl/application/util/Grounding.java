@@ -207,7 +207,7 @@ public class Grounding {
             DataStore dataStore, QueryRewriter rewriter) {
         log.info("Grounding experiment on rule {} -- {}", ruleIndex, rule);
 
-        Set<Formula> queries = rewriter.allCandidates(rule.getGroundingFormula());
+        List<Formula> queries = rewriter.allCandidates(rule.getGroundingFormula());
 
         // Get a consistent ordering of all the queries.
         List<String> queryKeys = new ArrayList<String>();
