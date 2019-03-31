@@ -26,10 +26,14 @@ import org.linqs.psl.model.predicate.Predicate;
 import org.linqs.psl.model.predicate.StandardPredicate;
 import org.linqs.psl.util.Parallel;
 
+import org.json.simple.JSONArray;
+import org.json.simple.JSONObject;
+import org.json.simple.JSONValue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
@@ -368,5 +372,64 @@ public class RDBMSDataStore implements DataStore {
         }
 
         return info;
+    }
+
+    /**
+     * For grounding experiments.
+     */
+    public ExplainResult explain(String queryString) {
+        log.trace("Begin EXPLAIN");
+
+        // TODO(eriq): Support H2.
+        queryString = "EXPLAIN (FORMAT JSON) " + queryString;
+
+        StringBuilder result = new StringBuilder();
+        try (
+            Connection connection = getConnection();
+            Statement statement = connection.createStatement();
+            ResultSet results = statement.executeQuery(queryString);
+        ) {
+            boolean hasResults = false;
+            while (results.next()) {
+                hasResults = true;
+                result.append(results.getString(1));
+            }
+
+            if (!hasResults) {
+                log.error(queryString);
+                throw new RuntimeException("No results from an EXPLAIN.");
+            }
+        } catch (SQLException ex) {
+            log.error(queryString);
+            throw new RuntimeException("Error EXPLAINing.", ex);
+        }
+
+        Object parsed = JSONValue.parse(result.toString());
+        if (!(parsed instanceof JSONArray)) {
+            throw new RuntimeException("EXPLAIN text in unexpected format. Expected JSON array, got: " + parsed.getClass().getName());
+        }
+
+        // TODO(eriq): Make more robust.
+        JSONObject plan = (JSONObject)((JSONObject)((JSONArray)parsed).get(0)).get("Plan");
+        double totalCost = ((Double)plan.get("Total Cost")).doubleValue();
+        double startupCost = ((Double)plan.get("Startup Cost")).doubleValue();
+        long rows = ((Long)plan.get("Plan Rows")).longValue();
+
+        log.debug("Estimated Cost: {}, Startup Cost: {}, Estimated Rows: {}", totalCost, startupCost, rows);
+        log.trace("End EXPLAIN");
+
+        return new ExplainResult(totalCost, startupCost, rows);
+    }
+
+    public static class ExplainResult {
+        public final double totalCost;
+        public final double startupCost;
+        public final long rows;
+
+        public ExplainResult(double totalCost, double startupCost, long rows) {
+            this.startupCost = startupCost;
+            this.totalCost = totalCost;
+            this.rows = rows;
+        }
     }
 }

@@ -22,8 +22,10 @@ import org.linqs.psl.config.Config;
 import org.linqs.psl.database.DataStore;
 import org.linqs.psl.database.QueryResultIterable;
 import org.linqs.psl.database.atom.AtomManager;
+import org.linqs.psl.database.rdbms.Formula2SQL;
 import org.linqs.psl.database.rdbms.QueryRewriter;
 import org.linqs.psl.database.rdbms.RDBMSDataStore;
+import org.linqs.psl.database.rdbms.RDBMSDatabase;
 import org.linqs.psl.model.Model;
 import org.linqs.psl.model.atom.Atom;
 import org.linqs.psl.model.formula.Formula;
@@ -32,6 +34,7 @@ import org.linqs.psl.model.rule.GroundRule;
 import org.linqs.psl.model.rule.Rule;
 import org.linqs.psl.model.term.Constant;
 import org.linqs.psl.model.term.Variable;
+import org.linqs.psl.util.ListUtils;
 import org.linqs.psl.util.Parallel;
 import org.linqs.psl.util.StringUtils;
 
@@ -76,6 +79,12 @@ public class Grounding {
      */
     public static final String EXPERIMENT_RULE_QUERIES_KEY = CONFIG_PREFIX + ".experiment.rulequeries";
     public static final String EXPERIMENT_RULE_QUERIES_DEFAULT = "";
+
+    /**
+     * For each rule, run a full estimation (descend the entire search tree).
+     */
+    public static final String EXPERIMENT_FULL_ESTIMATE_KEY = CONFIG_PREFIX + ".experiment.fullestimate";
+    public static final boolean EXPERIMENT_FULL_ESTIMATE_DEFAULT = false;
 
     public static final String RULE_DELIM = "_";
     public static final String QUERY_DELIM = ":";
@@ -178,6 +187,7 @@ public class Grounding {
      */
     public static void groundingExperiment(List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
         String ruleQueriesString = Config.getString(EXPERIMENT_RULE_QUERIES_KEY, EXPERIMENT_RULE_QUERIES_DEFAULT);
+        boolean fullEstimate = Config.getBoolean(EXPERIMENT_FULL_ESTIMATE_KEY, EXPERIMENT_FULL_ESTIMATE_DEFAULT);
         String[] ruleQueries = ruleQueriesString.split(RULE_DELIM);
 
         Parallel.initPool();
@@ -198,13 +208,14 @@ public class Grounding {
 
             Rule rule = rules.get(ruleIndex);
 
-            singleGroundingExperiment(rule, ruleIndex, queryIndex, atomManager, groundRuleStore, dataStore, rewriter);
+            singleGroundingExperiment(rule, ruleIndex, queryIndex, atomManager, groundRuleStore, dataStore, rewriter, fullEstimate);
         }
     }
 
     private static void singleGroundingExperiment(Rule rule, int ruleIndex, int queryToGround,
             AtomManager atomManager, GroundRuleStore groundRuleStore,
-            DataStore dataStore, QueryRewriter rewriter) {
+            DataStore dataStore, QueryRewriter rewriter,
+            boolean fullEstimate) {
         log.info("Grounding experiment on rule {} -- {}", ruleIndex, rule);
 
         List<Formula> queries = rewriter.allCandidates(rule.getGroundingFormula());
@@ -238,6 +249,32 @@ public class Grounding {
 
         if (queryToGround != QUERY_VIEW_ALL_VALUE && (queryToGround < 0 || queryToGround > queries.size())) {
             throw new RuntimeException("Bad value for query (rewrite), got: " + queryToGround);
+        }
+
+        if (fullEstimate) {
+            log.info("Estimating full search space.");
+            List<String> row = new ArrayList<String>();
+
+            row.add("Index");
+            row.add("Query");
+            row.add("Count");
+            row.add("Cost");
+            row.add("Rows");
+            log.info("FullEstimate -- " + ListUtils.join("\t", row));
+
+            for (int i = 0; i < queryKeys.size(); i++) {
+                row.clear();
+
+                String sql = Formula2SQL.getQuery(queryMapping.get(queryKeys.get(i)), (RDBMSDatabase)atomManager.getDatabase(), false);
+                RDBMSDataStore.ExplainResult result = ((RDBMSDataStore)dataStore).explain(sql);
+
+                row.add("" + i);
+                row.add(queryMapping.get(queryKeys.get(i)).toString());
+                row.add(atomCounts.get(queryKeys.get(i)).toString());
+                row.add("" + result.totalCost);
+                row.add("" + result.rows);
+                log.info("FullEstimate -- " + ListUtils.join("\t", row));
+            }
         }
 
         if (queryToGround == QUERY_VIEW_ALL_VALUE) {
