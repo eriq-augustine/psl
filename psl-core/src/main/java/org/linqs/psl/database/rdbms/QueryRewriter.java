@@ -28,6 +28,7 @@ import org.linqs.psl.model.predicate.GroundingOnlyPredicate;
 import org.linqs.psl.model.predicate.StandardPredicate;
 import org.linqs.psl.model.term.Term;
 import org.linqs.psl.model.term.Variable;
+import org.linqs.psl.util.BitUtils;
 import org.linqs.psl.util.IteratorUtils;
 
 import org.slf4j.Logger;
@@ -77,6 +78,10 @@ public class QueryRewriter {
     public static final String COST_ESTIMATOR_KEY = CONFIG_PREFIX + ".costestimator";
     public static final String COST_ESTIMATOR_DEFAULT = CostEstimator.HISTOGRAM.toString();
 
+    private double optimisticCostWeight;
+    private double pessimisticCostWeight;
+    private double optimisticRowWeight;
+    private double pessimisticRowWeight;
 
     private double allowedTotalCostIncrease;
     private double allowedStepCostIncrease;
@@ -84,6 +89,12 @@ public class QueryRewriter {
     private CostEstimator costEstimator;
 
     public QueryRewriter() {
+        // TODO(eriq): Config
+        optimisticCostWeight = 0.018;
+        optimisticRowWeight = 0.0015;
+        pessimisticCostWeight = 0.020;
+        pessimisticRowWeight = 0.0020;
+
         allowedTotalCostIncrease = Config.getDouble(ALLOWED_TOTAL_INCREASE_KEY, ALLOWED_TOTAL_INCREASE_DEFAULT);
         allowedStepCostIncrease = Config.getDouble(ALLOWED_STEP_INCREASE_KEY, ALLOWED_STEP_INCREASE_DEFAULT);
         costEstimator = CostEstimator.valueOf(Config.getString(COST_ESTIMATOR_KEY, COST_ESTIMATOR_DEFAULT).toUpperCase());
@@ -92,7 +103,147 @@ public class QueryRewriter {
     /**
      * Rewrite the query to minimize the execution time while trading off query size.
      */
-    public Formula rewrite(Formula baseFormula, RDBMSDataStore dataStore) {
+    public Formula rewrite(Formula baseFormula, RDBMSDatabase database) {
+        // Once validated, we know that the formula is a conjunction or single atom.
+        DatabaseQuery.validate(baseFormula);
+
+        // Shortcut for priors (single atoms).
+        if (baseFormula instanceof Atom) {
+            return baseFormula;
+        }
+
+        Set<Atom> atomBuffer = baseFormula.getAtoms(new HashSet<Atom>());
+        Set<Atom> passthrough = filterBaseAtoms(atomBuffer);
+        Map<Variable, Set<Atom>> variableUsageMapping = getAllUsedVariables(atomBuffer, null);
+
+        List<Atom> atoms = new ArrayList<Atom>(atomBuffer);
+
+        Set<Long> seenNodes = new HashSet<Long>();
+        Queue<RewriteNode> fringe = new LinkedList<RewriteNode>();
+
+        boolean[] atomBits = new boolean[atoms.size()];
+        for (int i = 0; i < atomBits.length; i++) {
+            atomBits[i] = true;
+        }
+
+        // Start with all atoms.
+        RewriteNode baseNode = createRewriteNode(atomBits, atoms, passthrough, atomBuffer, variableUsageMapping, database);
+        fringe.add(baseNode);
+        seenNodes.add(new Long(BitUtils.toBitSet(atomBits)));
+
+        RewriteNode bestNode = null;
+        while (fringe.size() > 0) {
+            RewriteNode node = fringe.remove();
+
+            if (bestNode == null || node.optimisticCost < bestNode.optimisticCost) {
+                bestNode = node;
+            }
+
+            log.trace("Expanding node: " + node);
+
+            // Expand the node by trying to remove each atom (in-turn).
+            BitUtils.toBits(node.atomsBitSet, atomBits);
+
+            for (int i = 0; i < atoms.size(); i++) {
+                // Skip if this atom was dropped somewhere else.
+                if (!atomBits[i]) {
+                    continue;
+                }
+
+                // Flip the atom.
+                atomBits[i] = false;
+
+                // Skip nodes we have seen before.
+                Long bitId = new Long(BitUtils.toBitSet(atomBits));
+                if (!seenNodes.contains(bitId)) {
+                    seenNodes.add(bitId);
+
+                    RewriteNode child = createRewriteNode(atomBits, atoms, passthrough, atomBuffer, variableUsageMapping, database);
+
+                    // Skip invalid rewrites.
+                    // Only add this child if their optimisitic is better than the current best's pessimistic.
+                    if (child != null && child.optimisticCost < bestNode.pessimisticCost) {
+                        fringe.add(child);
+                    } else if (child != null) {
+                        log.trace("Rejecting node: " + child);
+                    }
+                }
+
+                // Unflip the atom (so we can flip the next one).
+                atomBits[i] = true;
+            }
+        }
+
+        log.debug("Computed cost-based query rewrite for [{}]({}): [{}]({}).",
+                baseNode.formula, baseNode.optimisticCost, bestNode.formula, bestNode.optimisticCost);
+
+        return bestNode.formula;
+    }
+
+    /**
+     * Given the active atoms, perform the rewrite and estimate the cost.
+     * @return The rewrite node, or null if the rewrite is invalid.
+     */
+    private RewriteNode createRewriteNode(boolean[] atomBits, List<Atom> atoms,
+            Set<Atom> passthrough, Set<Atom> buffer, Map<Variable, Set<Atom>> variableUsageMapping,
+            RDBMSDatabase database) {
+        Formula formula = constructFormula(atomBits, atoms, passthrough, buffer);
+        int activeAtoms = buffer.size() - passthrough.size();
+
+        // Make sure that all variables are covered.
+        for (Map.Entry<Variable, Set<Atom>> entry : variableUsageMapping.entrySet()) {
+            boolean hasVariable = false;
+            for (Atom atomWithVariable : entry.getValue()) {
+                if (buffer.contains(atomWithVariable)) {
+                    hasVariable = true;
+                    break;
+                }
+            }
+
+            if (!hasVariable) {
+                return null;
+            }
+        }
+
+        RDBMSDataStore dataStore = (RDBMSDataStore)database.getDataStore();
+        String sql = Formula2SQL.getQuery(formula, database, false);
+        RDBMSDataStore.ExplainResult result = dataStore.explain(sql);
+
+        double optimisticCost = result.totalCost * optimisticCostWeight + result.rows * optimisticRowWeight * atomBits.length;
+        double pessimisticCost = result.totalCost * pessimisticCostWeight + result.rows * pessimisticRowWeight * atomBits.length;
+
+        return new RewriteNode(BitUtils.toBitSet(atomBits), formula, optimisticCost, pessimisticCost);
+    }
+
+    /**
+     * Construct a formula from the active atoms.
+     * |buffer| will be cleared at the beginning of this method,
+     * but left filled with all the ative atoms (including passthrough) on return.
+     */
+    private Formula constructFormula(boolean[] atomBits, List<Atom> atoms, Set<Atom> passthrough, Set<Atom> buffer) {
+        buffer.clear();
+        buffer.addAll(passthrough);
+
+        for (int i = 0; i < atomBits.length; i++) {
+            if (atomBits[i]) {
+                buffer.add(atoms.get(i));
+            }
+        }
+
+        Formula formula = null;
+        if (buffer.size() == 1) {
+            formula = buffer.iterator().next();
+        } else {
+            formula = new Conjunction(buffer.toArray(new Formula[0]));
+        }
+
+        return formula;
+    }
+
+    /**
+     * Rewrite the query to minimize the execution time acording to join estimators while trading off query size.
+     */
+    public Formula rewriteWithJoinEstimation(Formula baseFormula, RDBMSDataStore dataStore) {
         // Once validated, we know that the formula is a conjunction or single atom.
         DatabaseQuery.validate(baseFormula);
 
@@ -454,5 +605,24 @@ public class QueryRewriter {
 
         atoms.removeAll(removeAtoms);
         return passthrough;
+    }
+
+    private static class RewriteNode {
+        public long atomsBitSet;
+        public Formula formula;
+        public double optimisticCost;
+        public double pessimisticCost;
+
+        public RewriteNode(long atomsBitSet, Formula formula, double optimisticCost, double pessimisticCost) {
+            this.atomsBitSet = atomsBitSet;
+            this.formula = formula;
+            this.optimisticCost = optimisticCost;
+            this.pessimisticCost = pessimisticCost;
+        }
+
+        public String toString() {
+            return String.format("{Atom Bits: %d, Optimistic: %f, Pessimistic: %f, Formula: %s}",
+                    atomsBitSet, optimisticCost, pessimisticCost, formula);
+        }
     }
 }
