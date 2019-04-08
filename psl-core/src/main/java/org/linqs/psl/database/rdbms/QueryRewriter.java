@@ -35,6 +35,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
@@ -119,8 +120,10 @@ public class QueryRewriter {
         List<Atom> atoms = new ArrayList<Atom>(atomBuffer);
 
         Set<Long> seenNodes = new HashSet<Long>();
-        Queue<RewriteNode> fringe = new LinkedList<RewriteNode>();
+        RewriteFringe fringe = new BoundedRewriteFringe();
 
+        // A bitset representing the different atoms involved in the rewrite.
+        // We will typically just pull a node's long bitset into this buffer.
         boolean[] atomBits = new boolean[atoms.size()];
         for (int i = 0; i < atomBits.length; i++) {
             atomBits[i] = true;
@@ -128,16 +131,13 @@ public class QueryRewriter {
 
         // Start with all atoms.
         RewriteNode baseNode = createRewriteNode(atomBits, atoms, passthrough, atomBuffer, variableUsageMapping, database);
-        fringe.add(baseNode);
+        log.trace("Root node: " + baseNode);
+
+        fringe.push(baseNode);
         seenNodes.add(new Long(BitUtils.toBitSet(atomBits)));
 
-        RewriteNode bestNode = null;
         while (fringe.size() > 0) {
-            RewriteNode node = fringe.remove();
-
-            if (bestNode == null || node.optimisticCost < bestNode.optimisticCost) {
-                bestNode = node;
-            }
+            RewriteNode node = fringe.pop();
 
             log.trace("Expanding node: " + node);
 
@@ -159,14 +159,8 @@ public class QueryRewriter {
                     seenNodes.add(bitId);
 
                     RewriteNode child = createRewriteNode(atomBits, atoms, passthrough, atomBuffer, variableUsageMapping, database);
-
-                    // Skip invalid rewrites.
-                    // Only add this child if their optimisitic is better than the current best's pessimistic.
-                    if (child != null && child.optimisticCost < bestNode.pessimisticCost) {
-                        fringe.add(child);
-                    } else if (child != null) {
-                        log.trace("Rejecting node: " + child);
-                    }
+                    log.trace("Found child: " + child);
+                    fringe.push(child);
                 }
 
                 // Unflip the atom (so we can flip the next one).
@@ -174,6 +168,7 @@ public class QueryRewriter {
             }
         }
 
+        RewriteNode bestNode = fringe.getBestNode();
         log.debug("Computed cost-based query rewrite for [{}]({}): [{}]({}).",
                 baseNode.formula, baseNode.optimisticCost, bestNode.formula, bestNode.optimisticCost);
 
@@ -182,6 +177,7 @@ public class QueryRewriter {
 
     /**
      * Given the active atoms, perform the rewrite and estimate the cost.
+     * The cost is non-trivial, since the query estimate is made.
      * @return The rewrite node, or null if the rewrite is invalid.
      */
     private RewriteNode createRewriteNode(boolean[] atomBits, List<Atom> atoms,
@@ -623,6 +619,76 @@ public class QueryRewriter {
         public String toString() {
             return String.format("{Atom Bits: %d, Optimistic: %f, Pessimistic: %f, Formula: %s}",
                     atomsBitSet, optimisticCost, pessimisticCost, formula);
+        }
+    }
+
+    /**
+     * Defines the strategy for exploring the rewrite space.
+     */
+    private abstract class RewriteFringe {
+        protected RewriteNode bestNode;
+        protected Collection<RewriteNode> fringe;
+
+        protected RewriteFringe(Collection<RewriteNode> fringe) {
+            bestNode = null;
+            this.fringe = fringe;
+        }
+
+        public int size() {
+            return fringe.size();
+        }
+
+        /**
+         * Add a node to the fringe.
+         * The node will be check if it is the best on add because the search through
+         * the rewrite space may be time/cost bounded,
+         *  and we want to check for the best node as soon as we pay the estimation cost (SQL EXPLAIN).
+         */
+        public void push(RewriteNode node) {
+            // Skip invalid rewrites.
+            if (node == null) {
+                return;
+            }
+
+            if (bestNode == null || node.optimisticCost < bestNode.optimisticCost) {
+                bestNode = node;
+            }
+
+            if (pushInternal(node)) {
+                log.trace("   Accepted node.");
+            } else {
+                log.trace("   Rejected node.");
+            }
+        }
+
+        public RewriteNode getBestNode() {
+            return bestNode;
+        }
+
+        /**
+         * Actaully add the node to the fringe.
+         * @return true is the node was accepted, false otherwise.
+         */
+        protected abstract boolean pushInternal(RewriteNode node);
+        public abstract RewriteNode pop();
+    }
+
+    public class BoundedRewriteFringe extends RewriteFringe {
+        public BoundedRewriteFringe() {
+            super(new LinkedList<RewriteNode>());
+        }
+
+        protected boolean pushInternal(RewriteNode node) {
+            if (node.optimisticCost < bestNode.pessimisticCost) {
+                ((LinkedList<RewriteNode>)fringe).addLast(node);
+                return true;
+            }
+
+            return false;
+        }
+
+        public RewriteNode pop() {
+            return ((LinkedList<RewriteNode>)fringe).removeFirst();
         }
     }
 }
