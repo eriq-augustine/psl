@@ -36,11 +36,14 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.Queue;
 
@@ -79,6 +82,14 @@ public class QueryRewriter {
     public static final String COST_ESTIMATOR_KEY = CONFIG_PREFIX + ".costestimator";
     public static final String COST_ESTIMATOR_DEFAULT = CostEstimator.HISTOGRAM.toString();
 
+    /**
+     * The search method to use (RewriteFringe descendent).
+     */
+    public static final String SEARCH_TYPE_KEY = CONFIG_PREFIX + ".searchtype";
+    public static final String SEARCH_TYPE_DEFAULT = BoundedRewriteFringe.class.getName();
+
+    private RewriteFringe fringe;
+
     private double optimisticCostWeight;
     private double pessimisticCostWeight;
     private double optimisticRowWeight;
@@ -99,6 +110,8 @@ public class QueryRewriter {
         allowedTotalCostIncrease = Config.getDouble(ALLOWED_TOTAL_INCREASE_KEY, ALLOWED_TOTAL_INCREASE_DEFAULT);
         allowedStepCostIncrease = Config.getDouble(ALLOWED_STEP_INCREASE_KEY, ALLOWED_STEP_INCREASE_DEFAULT);
         costEstimator = CostEstimator.valueOf(Config.getString(COST_ESTIMATOR_KEY, COST_ESTIMATOR_DEFAULT).toUpperCase());
+
+        fringe = (RewriteFringe)Config.getNewObject(SEARCH_TYPE_KEY, SEARCH_TYPE_DEFAULT);
     }
 
     /**
@@ -117,10 +130,16 @@ public class QueryRewriter {
         Set<Atom> passthrough = filterBaseAtoms(atomBuffer);
         Map<Variable, Set<Atom>> variableUsageMapping = getAllUsedVariables(atomBuffer, null);
 
+        // Get the atoms in a consistent ordering.
         List<Atom> atoms = new ArrayList<Atom>(atomBuffer);
+        Collections.sort(atoms, new Comparator<Atom>() {
+            public int compare(Atom a, Atom b) {
+                return a.toString().compareTo(b.toString());
+            }
+        });
 
         Set<Long> seenNodes = new HashSet<Long>();
-        RewriteFringe fringe = new BoundedRewriteFringe();
+        fringe.clear();
 
         // A bitset representing the different atoms involved in the rewrite.
         // We will typically just pull a node's long bitset into this buffer.
@@ -625,7 +644,7 @@ public class QueryRewriter {
     /**
      * Defines the strategy for exploring the rewrite space.
      */
-    private abstract class RewriteFringe {
+    public abstract static class RewriteFringe {
         protected RewriteNode bestNode;
         protected Collection<RewriteNode> fringe;
 
@@ -636,6 +655,11 @@ public class QueryRewriter {
 
         public int size() {
             return fringe.size();
+        }
+
+        public void clear() {
+            bestNode = null;
+            fringe.clear();
         }
 
         /**
@@ -666,29 +690,79 @@ public class QueryRewriter {
         }
 
         /**
-         * Actaully add the node to the fringe.
+         * Actually add the node to the fringe.
          * @return true is the node was accepted, false otherwise.
          */
         protected abstract boolean pushInternal(RewriteNode node);
         public abstract RewriteNode pop();
     }
 
-    public class BoundedRewriteFringe extends RewriteFringe {
-        public BoundedRewriteFringe() {
+    public static class DFSRewriteFringe extends RewriteFringe {
+        public DFSRewriteFringe() {
             super(new LinkedList<RewriteNode>());
         }
 
         protected boolean pushInternal(RewriteNode node) {
-            if (node.optimisticCost < bestNode.pessimisticCost) {
-                ((LinkedList<RewriteNode>)fringe).addLast(node);
-                return true;
-            }
-
-            return false;
+            ((LinkedList<RewriteNode>)fringe).addFirst(node);
+            return true;
         }
 
         public RewriteNode pop() {
             return ((LinkedList<RewriteNode>)fringe).removeFirst();
+        }
+    }
+
+    public static class BFSRewriteFringe extends RewriteFringe {
+        public BFSRewriteFringe() {
+            super(new LinkedList<RewriteNode>());
+        }
+
+        protected boolean pushInternal(RewriteNode node) {
+            ((LinkedList<RewriteNode>)fringe).addLast(node);
+            return true;
+        }
+
+        public RewriteNode pop() {
+            return ((LinkedList<RewriteNode>)fringe).removeFirst();
+        }
+    }
+
+    public static class UCSRewriteFringe extends RewriteFringe {
+        public UCSRewriteFringe() {
+            // Use a priority queue (with PriorityQueue's default size of 11.
+            super(new PriorityQueue<RewriteNode>(11, new Comparator<RewriteNode>() {
+                public int compare(RewriteNode a, RewriteNode b) {
+                    if (a.optimisticCost < b.optimisticCost) {
+                        return -1;
+                    }
+
+                    if (a.optimisticCost > b.optimisticCost) {
+                        return 1;
+                    }
+
+                    return 0;
+                }
+            }));
+        }
+
+        protected boolean pushInternal(RewriteNode node) {
+            ((PriorityQueue<RewriteNode>)fringe).add(node);
+            return true;
+        }
+
+        public RewriteNode pop() {
+            return ((PriorityQueue<RewriteNode>)fringe).poll();
+        }
+    }
+
+    public static class BoundedRewriteFringe extends UCSRewriteFringe {
+        @Override
+        protected boolean pushInternal(RewriteNode node) {
+            if (node.optimisticCost > bestNode.pessimisticCost) {
+                return false;
+            }
+
+            return super.pushInternal(node);
         }
     }
 }
