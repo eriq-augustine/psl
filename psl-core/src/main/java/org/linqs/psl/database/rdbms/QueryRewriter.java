@@ -60,29 +60,6 @@ public class QueryRewriter {
     public static final String CONFIG_PREFIX = "queryrewriter";
 
     /**
-     * How much we allow the query cost (number of rows) to for new plans.
-     */
-    public static final String ALLOWED_TOTAL_INCREASE_KEY = CONFIG_PREFIX + ".allowedtotalcostincrease";
-    public static final double ALLOWED_TOTAL_INCREASE_DEFAULT = 2.0;
-
-    /**
-     * How much we allow the query cost (number of rows) to increase at each step.
-     */
-    public static final String ALLOWED_STEP_INCREASE_KEY = CONFIG_PREFIX + ".allowedstepcostincrease";
-    public static final double ALLOWED_STEP_INCREASE_DEFAULT = 1.5;
-
-    /**
-     * The different methods for estimating the join cost.
-     */
-    public static enum CostEstimator { SIZE, SELECTIVITY, HISTOGRAM }
-
-    /**
-     * Whether we should use histograms or column selectivity to estimate the join size.
-     */
-    public static final String COST_ESTIMATOR_KEY = CONFIG_PREFIX + ".costestimator";
-    public static final String COST_ESTIMATOR_DEFAULT = CostEstimator.HISTOGRAM.toString();
-
-    /**
      * The search method to use (RewriteFringe descendent).
      */
     public static final String SEARCH_TYPE_KEY = CONFIG_PREFIX + ".searchtype";
@@ -130,17 +107,11 @@ public class QueryRewriter {
     private double allowedTotalCostIncrease;
     private double allowedStepCostIncrease;
 
-    private CostEstimator costEstimator;
-
     public QueryRewriter() {
         optimisticCostWeight = Config.getDouble(OPTIMISTIC_COST_KEY, OPTIMISTIC_COST_DEFAULT);
         optimisticRowWeight = Config.getDouble(OPTIMISTIC_ROW_KEY, OPTIMISTIC_ROW_DEFAULT);
         pessimisticCostWeight = Config.getDouble(PESSIMISTIC_COST_KEY, PESSIMISTIC_COST_DEFAULT);
         pessimisticRowWeight = Config.getDouble(PESSIMISTIC_ROW_KEY, PESSIMISTIC_ROW_DEFAULT);
-
-        allowedTotalCostIncrease = Config.getDouble(ALLOWED_TOTAL_INCREASE_KEY, ALLOWED_TOTAL_INCREASE_DEFAULT);
-        allowedStepCostIncrease = Config.getDouble(ALLOWED_STEP_INCREASE_KEY, ALLOWED_STEP_INCREASE_DEFAULT);
-        costEstimator = CostEstimator.valueOf(Config.getString(COST_ESTIMATOR_KEY, COST_ESTIMATOR_DEFAULT).toUpperCase());
 
         fringe = (RewriteFringe)Config.getNewObject(SEARCH_TYPE_KEY, SEARCH_TYPE_DEFAULT);
         budget = Config.getInt(SEARCH_BUDGET_KEY, SEARCH_BUDGET_DEFAULT);
@@ -290,85 +261,6 @@ public class QueryRewriter {
     }
 
     /**
-     * Rewrite the query to minimize the execution time acording to join estimators while trading off query size.
-     */
-    public Formula rewriteWithJoinEstimation(Formula baseFormula, RDBMSDataStore dataStore) {
-        // Once validated, we know that the formula is a conjunction or single atom.
-        DatabaseQuery.validate(baseFormula);
-
-        // Shortcut for priors (single atoms).
-        if (baseFormula instanceof Atom) {
-            return baseFormula;
-        }
-
-        Set<Atom> usedAtoms = baseFormula.getAtoms(new HashSet<Atom>());
-        Set<Atom> passthrough = filterBaseAtoms(usedAtoms);
-
-        Map<Predicate, TableStats> tableStats = fetchTableStats(usedAtoms, dataStore);
-
-        double baseCost = estimateQuerySize(costEstimator, usedAtoms, null, tableStats, dataStore);
-        double currentCost = baseCost;
-
-        log.trace("Starting cost: " + baseCost);
-
-        // TODO(eriq): A DP approach should be better than a greedy one.
-
-        while (true) {
-            // The estimated query cost after removing the target atom.
-            double bestCost = -1;
-            Atom bestAtom = null;
-
-            for (Atom atom : usedAtoms) {
-                if (canRemove(atom, usedAtoms)) {
-                    double cost = estimateQuerySize(costEstimator, usedAtoms, atom, tableStats, dataStore);
-                    if (cost < 0.0) {
-                        log.trace("Planned Cost for (" + usedAtoms + " - " + atom + "): MAX");
-                        continue;
-                    }
-
-                    log.trace("Planned Cost for (" + usedAtoms + " - " + atom + "): " + cost);
-
-                    if (bestAtom == null || cost < bestCost) {
-                        bestAtom = atom;
-                        bestCost = cost;
-                    }
-                }
-            }
-
-            if (bestAtom == null) {
-                break;
-            }
-
-            // We couldn't find any viable plans.
-            if (bestAtom == null) {
-                break;
-            }
-
-            // We expect the cost to go up, but will cut it off at some point.
-            if (bestCost > (baseCost * allowedTotalCostIncrease) || bestCost > (currentCost * allowedStepCostIncrease)) {
-                break;
-            }
-
-            usedAtoms.remove(bestAtom);
-            currentCost = bestCost;
-
-            log.trace("Choose plan for iteration: " + usedAtoms + ": " + bestCost);
-        }
-
-        usedAtoms.addAll(passthrough);
-
-        Formula query = null;
-        if (usedAtoms.size() == 1) {
-            query = usedAtoms.iterator().next();
-        } else {
-            query = new Conjunction(usedAtoms.toArray(new Formula[0]));
-        }
-
-        log.debug("Computed cost-based query rewrite for [{}]({}): [{}]({}).", baseFormula, baseCost, query, currentCost);
-        return query;
-    }
-
-    /**
      * Get all the valid candidate queries for a base query.
      * Rules with more than 64 standard atoms will throw.
      */
@@ -425,178 +317,6 @@ public class QueryRewriter {
         return candidates;
     }
 
-    private double estimateQuerySize(CostEstimator costEstimator, Set<Atom> atoms, Atom ignore, Map<Predicate, TableStats> tableStats, RDBMSDataStore dataStore) {
-        if (costEstimator == CostEstimator.HISTOGRAM) {
-            return estimateQuerySizeWithHistorgram(atoms, ignore, tableStats, dataStore);
-        } else if (costEstimator == CostEstimator.SELECTIVITY) {
-            return estimateQuerySizeWithSelectivity(atoms, ignore, tableStats, dataStore);
-        } else if (costEstimator == CostEstimator.SIZE) {
-            return estimateQuerySizeWithSize(atoms, ignore, tableStats, dataStore);
-        }
-
-        throw new IllegalStateException("Unknown CostEstimator value: " + costEstimator);
-    }
-
-    /**
-     * Estimate the cost of the query (conjunctive query over the given atoms) using histogram stats.
-     * Based off of: http://consystlab.unl.edu/Documents/StudentReports/Working-Note2-2008.pdf
-     * @param ignore if not null, then do not include it in the cost computation.
-     * @return negative if we exceed max size and should just discard this plan.
-     */
-    private double estimateQuerySizeWithHistorgram(Set<Atom> atoms, Atom ignore, Map<Predicate, TableStats> tableStats, RDBMSDataStore dataStore) {
-        double cost = 1.0;
-
-        // Start with the product of the joins.
-        for (Atom atom : atoms) {
-            if (atom == ignore) {
-                continue;
-            }
-
-            cost *= tableStats.get(atom.getPredicate()).getCount();
-        }
-
-        // Now compute for each variable.
-        for (Map.Entry<Variable, Set<Atom>> entry : getAllUsedVariables(atoms, null).entrySet()) {
-            Variable variable = entry.getKey();
-            Set<Atom> involvedAtoms = entry.getValue();
-
-            // Only worry about join columns.
-            if (involvedAtoms.size() <= 1) {
-                continue;
-            }
-
-            // The histogram that we will chain together using all the involved atoms.
-            SelectivityHistogram joinHistogram = null;
-            double crossProductSize = 1.0;
-
-            for (Atom atom : involvedAtoms) {
-                if (atom == ignore) {
-                    continue;
-                }
-
-                crossProductSize *= tableStats.get(atom.getPredicate()).getCount();
-
-                String columnName = getColumnName(dataStore, atom, variable);
-                SelectivityHistogram histogram = tableStats.get(atom.getPredicate()).getHistogram(columnName);
-
-                if (joinHistogram == null) {
-                    joinHistogram = histogram;
-                } else {
-                    @SuppressWarnings("unchecked")
-                    SelectivityHistogram ignoreUnchecked = joinHistogram.join(histogram);
-                    joinHistogram = ignoreUnchecked;
-                }
-            }
-
-            long joinSize = joinHistogram.size();
-            if (joinSize == Long.MAX_VALUE) {
-                return -1.0;
-            }
-
-            cost *= (joinHistogram.size() / crossProductSize);
-        }
-
-        return cost;
-    }
-
-    /**
-     * Estimate the cost of the query (conjunctive query over the given atoms).
-     * Based off of: http://users.csc.calpoly.edu/~dekhtyar/468-Spring2016/lectures/lec17.468.pdf
-     * @param ignore if not null, then do not include it in the cost computation.
-     */
-    private double estimateQuerySizeWithSelectivity(Set<Atom> atoms, Atom ignore, Map<Predicate, TableStats> tableStats, RDBMSDataStore dataStore) {
-        double cost = 1.0;
-
-        // Start with the product of the joins.
-        for (Atom atom : atoms) {
-            if (atom == ignore) {
-                continue;
-            }
-
-            cost *= tableStats.get(atom.getPredicate()).getCount();
-        }
-
-        // Now take out the join factor for each join attribute.
-        for (Variable variable : getAllUsedVariables(atoms, null).keySet()) {
-            int cardinalitiesCount = 0;
-            int minCardinality = 0;
-
-            for (Atom atom : atoms) {
-                if (atom == ignore) {
-                    continue;
-                }
-
-                if (!atom.getVariables().contains(variable)) {
-                    continue;
-                }
-
-                String columnName = getColumnName(dataStore, atom, variable);
-                int cardinality = tableStats.get(atom.getPredicate()).getCardinality(columnName);
-
-                if (cardinalitiesCount == 0 || cardinality < minCardinality) {
-                    minCardinality = cardinality;
-                }
-                cardinalitiesCount += 1;
-            }
-
-            // Only worry about join columns.
-            if (cardinalitiesCount <= 1) {
-                continue;
-            }
-
-            cost /= (double)minCardinality;
-        }
-
-        return cost;
-    }
-
-    /**
-     * Estimate the cost of the query (conjunctive query over the given atoms) using just the size of the involved tables.
-     * @param ignore if not null, then do not include it in the cost computation.
-     */
-    private double estimateQuerySizeWithSize(Set<Atom> atoms, Atom ignore, Map<Predicate, TableStats> tableStats, RDBMSDataStore dataStore) {
-        double cost = 1.0;
-
-        // Just use the product of the joins.
-        for (Atom atom : atoms) {
-            if (atom == ignore) {
-                continue;
-            }
-
-            cost *= tableStats.get(atom.getPredicate()).getCount();
-        }
-
-        return cost;
-    }
-
-    private String getColumnName(RDBMSDataStore dataStore, Atom atom, Variable variable) {
-        int columnIndex = -1;
-        Term[] args = atom.getArguments();
-        for (int i = 0; i < args.length; i++) {
-            if (variable.equals(args[i])) {
-                columnIndex = i;
-                break;
-            }
-        }
-
-        if (columnIndex == -1) {
-            throw new java.util.NoSuchElementException(String.format("Could not find column name for variable %s in atom %s.", variable, atom));
-        }
-
-        return dataStore.getPredicateInfo(atom.getPredicate()).argumentColumns().get(columnIndex);
-    }
-
-    /**
-     * Is it safe to remove the given atom from the given query?
-     */
-    private boolean canRemove(Atom atom, Set<Atom> usedAtoms) {
-        // Make sure that we do not remove any variables (ie there is at least one other atom that uses the variable)..
-        Set<Variable> remainingVariables = atom.getVariables();
-        remainingVariables.removeAll(getAllUsedVariables(usedAtoms, atom).keySet());
-
-        return remainingVariables.size() == 0;
-    }
-
     private Map<Variable, Set<Atom>> getAllUsedVariables(Set<Atom> atoms, Atom ignore) {
         Map<Variable, Set<Atom>> variables = new HashMap<Variable, Set<Atom>>();
 
@@ -615,20 +335,6 @@ public class QueryRewriter {
         }
 
         return variables;
-    }
-
-    private Map<Predicate, TableStats> fetchTableStats(Set<Atom> usedAtoms, RDBMSDataStore dataStore) {
-        Set<Predicate> predicates = new HashSet<Predicate>();
-        for (Atom atom : usedAtoms) {
-            predicates.add(atom.getPredicate());
-        }
-
-        Map<Predicate, TableStats> stats = new HashMap<Predicate, TableStats>();
-        for (Predicate predicate : predicates) {
-            stats.put(predicate, dataStore.getPredicateInfo(predicate).getTableStats(dataStore.getDriver()));
-        }
-
-        return stats;
     }
 
     /**
