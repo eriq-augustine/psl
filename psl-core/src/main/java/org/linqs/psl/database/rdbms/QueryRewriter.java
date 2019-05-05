@@ -177,14 +177,16 @@ public class QueryRewriter {
                 // Flip the atom.
                 atomBits[i] = false;
 
-                // Skip nodes we have seen before.
+                // Skip nodes we have seen before and totally empty rewrites (no atoms on).
                 Long bitId = new Long(BitUtils.toBitSet(atomBits));
-                if (!seenNodes.contains(bitId)) {
+                if (!seenNodes.contains(bitId) && bitId.longValue() != 0) {
                     seenNodes.add(bitId);
 
                     RewriteNode child = createRewriteNode(atomBits, atoms, passthrough, atomBuffer, variableUsageMapping, database);
                     log.trace("Found child: " + child);
-                    fringe.push(child);
+                    if (child != null) {
+                        fringe.push(child);
+                    }
                 }
 
                 // Unflip the atom (so we can flip the next one).
