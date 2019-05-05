@@ -69,6 +69,14 @@ public class Grounding {
     public static final String SERIAL_KEY = CONFIG_PREFIX + ".serial";
     public static final boolean SERIAL_DEFAULT = false;
 
+    /**
+     * Whether or not to start instantiating ground rules as query results stream in,
+     * instead of waiting for them all the show up.
+     * TODO(eriq): Will be true in real code.
+     */
+    public static final String EAGER_INSTANTIATION_KEY = CONFIG_PREFIX + ".eagerinstantiation";
+    public static final boolean EAGER_INSTANTIATION_DEFAULT = false;
+
     public static final String EXPERIMENT_KEY = CONFIG_PREFIX + ".experiment";
     public static final boolean EXPERIMENT_DEFAULT = false;
 
@@ -124,6 +132,7 @@ public class Grounding {
     public static int groundAll(List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
         boolean rewrite = Config.getBoolean(REWRITE_QUERY_KEY, REWRITE_QUERY_DEFAULT);
         boolean serial = Config.getBoolean(SERIAL_KEY, SERIAL_DEFAULT);
+        boolean eagerInstantiation = Config.getBoolean(EAGER_INSTANTIATION_KEY, EAGER_INSTANTIATION_DEFAULT);
 
         Map<Formula, List<Rule>> queries = new HashMap<Formula, List<Rule>>();
         List<Rule> bypassRules = new ArrayList<Rule>();
@@ -163,14 +172,14 @@ public class Grounding {
         for (Map.Entry<Formula, List<Rule>> entry : queries.entrySet()) {
             if (!serial) {
                 // If parallel, ground all the rules that match this formula at once.
-                groundParallel(entry.getKey(), entry.getValue(), atomManager, groundRuleStore);
+                groundParallel(entry.getKey(), entry.getValue(), atomManager, groundRuleStore, eagerInstantiation);
             } else {
                 // If serial, ground the rules with this formula one at a time.
                 for (Rule rule : entry.getValue()) {
                     List<Rule> tempRules = new ArrayList<Rule>();
                     tempRules.add(rule);
 
-                    groundParallel(entry.getKey(), tempRules, atomManager, groundRuleStore);
+                    groundParallel(entry.getKey(), tempRules, atomManager, groundRuleStore, eagerInstantiation);
                 }
             }
         }
@@ -291,11 +300,11 @@ public class Grounding {
             List<Rule> tempRules = new ArrayList<Rule>();
             tempRules.add(rule);
 
-            groundParallel(query, tempRules, atomManager, groundRuleStore);
+            groundParallel(query, tempRules, atomManager, groundRuleStore, false);
         }
     }
 
-    private static int groundParallel(Formula query, List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
+    private static int groundParallel(Formula query, List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore, boolean eagerInstantiation) {
         log.debug("Grounding {} rule(s) with query: [{}].", rules.size(), query);
         for (Rule rule : rules) {
             log.trace("    " + rule);
@@ -310,7 +319,7 @@ public class Grounding {
         // NOTE(eriq): For experiments, don't instantiate as we receive results in.
         //  Instead, read them all into memory and then call after the query complete.
         QueryResultIterable queryResults = atomManager.executeGroundingQuery(query);
-        if (false) {
+        if (eagerInstantiation) {
             Parallel.RunTimings timings = Parallel.foreach(queryResults, new GroundWorker(atomManager, groundRuleStore, queryResults.getVariableMap(), rules));
             log.trace("Got {} results from query [{}].", timings.iterations, query);
         } else {
