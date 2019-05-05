@@ -88,7 +88,39 @@ public class QueryRewriter {
     public static final String SEARCH_TYPE_KEY = CONFIG_PREFIX + ".searchtype";
     public static final String SEARCH_TYPE_DEFAULT = BoundedRewriteFringe.class.getName();
 
+    /**
+     * How many node expansions are allowed when searching for the best query.
+     * Use 0 for an unlimited budget.
+     */
+    public static final String SEARCH_BUDGET_KEY = CONFIG_PREFIX + ".searchbudget";
+    public static final int SEARCH_BUDGET_DEFAULT = 100;
+
+    /**
+     * For the bounded cost rewriter, the optimistic database constant (D).
+     */
+    public static final String OPTIMISTIC_COST_KEY = CONFIG_PREFIX + ".optimisticcost";
+    public static final double OPTIMISTIC_COST_DEFAULT = 0.018;
+
+    /**
+     * For the bounded cost rewriter, the optimistic row size constant (M).
+     */
+    public static final String OPTIMISTIC_ROW_KEY = CONFIG_PREFIX + ".optimisticrow";
+    public static final double OPTIMISTIC_ROW_DEFAULT = 0.0015;
+
+    /**
+     * For the bounded cost rewriter, the pessimistic database constant (D).
+     */
+    public static final String PESSIMISTIC_COST_KEY = CONFIG_PREFIX + ".pessimisticcost";
+    public static final double PESSIMISTIC_COST_DEFAULT = 0.020;
+
+    /**
+     * For the bounded cost rewriter, the pessimistic row size constant (M).
+     */
+    public static final String PESSIMISTIC_ROW_KEY = CONFIG_PREFIX + ".pessimisticrow";
+    public static final double PESSIMISTIC_ROW_DEFAULT = 0.0020;
+
     private RewriteFringe fringe;
+    private int budget;
 
     private double optimisticCostWeight;
     private double pessimisticCostWeight;
@@ -101,17 +133,17 @@ public class QueryRewriter {
     private CostEstimator costEstimator;
 
     public QueryRewriter() {
-        // TODO(eriq): Config
-        optimisticCostWeight = 0.018;
-        optimisticRowWeight = 0.0015;
-        pessimisticCostWeight = 0.020;
-        pessimisticRowWeight = 0.0020;
+        optimisticCostWeight = Config.getDouble(OPTIMISTIC_COST_KEY, OPTIMISTIC_COST_DEFAULT);
+        optimisticRowWeight = Config.getDouble(OPTIMISTIC_ROW_KEY, OPTIMISTIC_ROW_DEFAULT);
+        pessimisticCostWeight = Config.getDouble(PESSIMISTIC_COST_KEY, PESSIMISTIC_COST_DEFAULT);
+        pessimisticRowWeight = Config.getDouble(PESSIMISTIC_ROW_KEY, PESSIMISTIC_ROW_DEFAULT);
 
         allowedTotalCostIncrease = Config.getDouble(ALLOWED_TOTAL_INCREASE_KEY, ALLOWED_TOTAL_INCREASE_DEFAULT);
         allowedStepCostIncrease = Config.getDouble(ALLOWED_STEP_INCREASE_KEY, ALLOWED_STEP_INCREASE_DEFAULT);
         costEstimator = CostEstimator.valueOf(Config.getString(COST_ESTIMATOR_KEY, COST_ESTIMATOR_DEFAULT).toUpperCase());
 
         fringe = (RewriteFringe)Config.getNewObject(SEARCH_TYPE_KEY, SEARCH_TYPE_DEFAULT);
+        budget = Config.getInt(SEARCH_BUDGET_KEY, SEARCH_BUDGET_DEFAULT);
     }
 
     /**
@@ -155,8 +187,10 @@ public class QueryRewriter {
         fringe.push(baseNode);
         seenNodes.add(new Long(BitUtils.toBitSet(atomBits)));
 
-        while (fringe.size() > 0) {
+        int expansions = 0;
+        while (fringe.size() > 0 && (budget <= 0 || expansions <= budget)) {
             RewriteNode node = fringe.pop();
+            expansions++;
 
             log.trace("Expanding node: " + node);
 
