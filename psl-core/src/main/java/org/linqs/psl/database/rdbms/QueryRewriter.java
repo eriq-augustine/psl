@@ -66,7 +66,7 @@ public class QueryRewriter {
     public static final String SEARCH_TYPE_DEFAULT = BoundedRewriteFringe.class.getName();
 
     /**
-     * How many node expansions are allowed when searching for the best query.
+     * How many node explains are allowed when searching for the best query.
      * Use 0 for an unlimited budget.
      */
     public static final String SEARCH_BUDGET_KEY = CONFIG_PREFIX + ".searchbudget";
@@ -158,10 +158,12 @@ public class QueryRewriter {
         fringe.push(baseNode);
         seenNodes.add(new Long(BitUtils.toBitSet(atomBits)));
 
-        int expansions = 0;
-        while (fringe.size() > 0 && (budget <= 0 || expansions <= budget)) {
+        // Keep track of how many times we ask for an EXPLAIN from the database.
+        // After the budget is expended, we will still finish out search on the remaining nodes.
+        int explains = 0;
+
+        while (fringe.size() > 0) {
             RewriteNode node = fringe.pop();
-            expansions++;
 
             log.trace("Expanding node: " + node);
 
@@ -178,14 +180,20 @@ public class QueryRewriter {
                 atomBits[i] = false;
 
                 // Skip nodes we have seen before and totally empty rewrites (no atoms on).
+                // Also skip nodes if we have already exceeded our budget.
                 Long bitId = new Long(BitUtils.toBitSet(atomBits));
-                if (!seenNodes.contains(bitId) && bitId.longValue() != 0) {
+                if ((budget <= 0 || explains <= budget) && !seenNodes.contains(bitId) && bitId.longValue() != 0) {
                     seenNodes.add(bitId);
 
                     RewriteNode child = createRewriteNode(atomBits, atoms, passthrough, atomBuffer, variableUsageMapping, database);
                     log.trace("Found child: " + child);
                     if (child != null) {
                         fringe.push(child);
+                        explains++;
+
+                        if (explains >= budget) {
+                            log.trace("Search budget expended, ignoring future EXPLAIN requests.");
+                        }
                     }
                 }
 
