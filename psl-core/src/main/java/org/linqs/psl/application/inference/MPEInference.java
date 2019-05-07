@@ -59,6 +59,11 @@ public class MPEInference extends InferenceApplication {
 
         int groundCount = Grounding.groundAll(model, atomManager, groundRuleStore);
 
+        if (Config.getBoolean(Grounding.EXPERIMENT_SKIP_INFERENCE_KEY, Grounding.EXPERIMENT_SKIP_INFERENCE_DEFAULT)) {
+            log.info("Skipping term generation for grounding experiments.");
+            return;
+        }
+
         if (termStore instanceof ADMMTermStore) {
             ((ADMMTermStore)termStore).ensureVariableCapacity(atomManager.getCachedRVACount());
         }
