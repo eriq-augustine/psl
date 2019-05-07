@@ -71,7 +71,7 @@ public class MPEInference extends InferenceApplication {
 
     @Override
     public void inference() {
-        if (Config.getBoolean(Grounding.EXPERIMENT_KEY, Grounding.EXPERIMENT_DEFAULT)) {
+        if (Config.getBoolean(Grounding.EXPERIMENT_SKIP_INFERENCE_KEY, Grounding.EXPERIMENT_SKIP_INFERENCE_DEFAULT)) {
             log.info("Skipping inference for grounding experiments.");
             return;
         }

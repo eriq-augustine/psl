@@ -80,6 +80,9 @@ public class Grounding {
     public static final String EXPERIMENT_KEY = CONFIG_PREFIX + ".experiment";
     public static final boolean EXPERIMENT_DEFAULT = false;
 
+    public static final String EXPERIMENT_SKIP_INFERENCE_KEY = CONFIG_PREFIX + ".experiment.skipinference";
+    public static final boolean EXPERIMENT_SKIP_INFERENCE_DEFAULT = false;
+
     /**
      * The specific rules and rewrites to run.
      * "rule:rewrite;...".
