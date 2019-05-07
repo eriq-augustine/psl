@@ -320,7 +320,7 @@ public class Grounding {
         //  Instead, read them all into memory and then call after the query complete.
         QueryResultIterable queryResults = atomManager.executeGroundingQuery(query);
         if (eagerInstantiation) {
-            Parallel.RunTimings timings = Parallel.foreach(queryResults, new GroundWorker(atomManager, groundRuleStore, queryResults.getVariableMap(), rules));
+            Parallel.RunTimings timings = Parallel.foreach(queryResults, PARALLEL_WORKER_QUEUE_SIZE, new GroundWorker(atomManager, groundRuleStore, queryResults.getVariableMap(), rules));
             log.trace("Got {} results from query [{}].", timings.iterations, query);
         } else {
             List<Constant[]> results = new ArrayList<Constant[]>();
