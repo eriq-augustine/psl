@@ -107,10 +107,11 @@ public class DCDStreamingTermStore implements DCDTermStore {
     private ByteBuffer termBuffer;
 
     /**
-     * The IO buffer for lagrange values.
+     * The IO buffers for lagrange values.
      * These values change every iteration, and need to be updated.
      */
-    private ByteBuffer lagrangeBuffer;
+    private ByteBuffer lagrangeReadBuffer;
+    private ByteBuffer lagrangeWriteBuffer;
 
     /**
      * Terms in the current page.
@@ -174,7 +175,9 @@ public class DCDStreamingTermStore implements DCDTermStore {
         numPages = 0;
 
         termBuffer = null;
-        lagrangeBuffer = null;
+        lagrangeReadBuffer = null;
+        lagrangeWriteBuffer = null;
+
         pageSize = Config.getInt(PAGE_SIZE_KEY, PAGE_SIZE_DEFAULT);
         pageDir = Config.getString(PAGE_LOCATION_KEY, PAGE_LOCATION_DEFAULT);
         shufflePage = Config.getBoolean(SHUFFLE_PAGE_KEY, SHUFFLE_PAGE_DEFAULT);
@@ -271,9 +274,14 @@ public class DCDStreamingTermStore implements DCDTermStore {
             termBuffer = null;
         }
 
-        if (lagrangeBuffer != null) {
-            lagrangeBuffer.clear();
-            lagrangeBuffer = null;
+        if (lagrangeReadBuffer != null) {
+            lagrangeReadBuffer.clear();
+            lagrangeReadBuffer = null;
+        }
+
+        if (lagrangeWriteBuffer != null) {
+            lagrangeWriteBuffer.clear();
+            lagrangeWriteBuffer = null;
         }
 
         if (termCache != null) {
@@ -317,11 +325,14 @@ public class DCDStreamingTermStore implements DCDTermStore {
      * A callback for the initial round iterator.
      * The ByterBuffers are here because of possible reallocation.
      */
-    public void initialIterationComplete(int termCount, int numPages, ByteBuffer termBuffer, ByteBuffer lagrangeBuffer) {
+    public void initialIterationComplete(int termCount, int numPages, ByteBuffer termBuffer, ByteBuffer lagrangeWriteBuffer) {
         seenTermCount = termCount;
         this.numPages = numPages;
         this.termBuffer = termBuffer;
-        this.lagrangeBuffer = lagrangeBuffer;
+        this.lagrangeWriteBuffer = lagrangeWriteBuffer;
+
+        // Now allocate the lagrange read buffer bassed on the size of the write buffer.
+        lagrangeReadBuffer = ByteBuffer.allocate(lagrangeWriteBuffer.capacity());
 
         initialRound = false;
         activeIterator = null;
@@ -343,11 +354,11 @@ public class DCDStreamingTermStore implements DCDTermStore {
         if (initialRound) {
             activeIterator = new DCDStreamingInitialRoundIterator(
                     this, rules, atomManager, termGenerator,
-                    termCache, termPool, termBuffer, lagrangeBuffer, pageSize);
+                    termCache, termPool, termBuffer, lagrangeWriteBuffer, pageSize);
         } else {
             activeIterator = new DCDStreamingCacheIterator(
                     this, variables, termCache, termPool,
-                    termBuffer, lagrangeBuffer, shufflePage, shuffleMap, randomizePageAccess, numPages);
+                    termBuffer, lagrangeReadBuffer, lagrangeWriteBuffer, shufflePage, shuffleMap, randomizePageAccess, numPages);
         }
 
         return activeIterator;

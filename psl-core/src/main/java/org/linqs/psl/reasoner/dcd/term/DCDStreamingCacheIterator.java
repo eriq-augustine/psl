@@ -20,6 +20,9 @@ package org.linqs.psl.reasoner.dcd.term;
 import org.linqs.psl.model.atom.RandomVariableAtom;
 import org.linqs.psl.util.RandUtils;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -33,6 +36,8 @@ import java.util.Map;
  * On these non-initial iterations, we will fill the term cache from disk and drain it.
  */
 public class DCDStreamingCacheIterator implements DCDStreamingIterator {
+    private static final Logger log = LoggerFactory.getLogger(DCDStreamingCacheIterator.class);
+
     private DCDStreamingTermStore parentStore;
     private Map<Integer, RandomVariableAtom> variables;
     private List<Integer> shuffleMap;
@@ -41,7 +46,8 @@ public class DCDStreamingCacheIterator implements DCDStreamingIterator {
     private List<DCDObjectiveTerm> termPool;
 
     private ByteBuffer termBuffer;
-    private ByteBuffer lagrangeBuffer;
+    private ByteBuffer lagrangeReadBuffer;
+    private ByteBuffer lagrangeWriteBuffer;
 
     private int currentPage;
     private int nextCachedTermIndex;
@@ -59,10 +65,13 @@ public class DCDStreamingCacheIterator implements DCDStreamingIterator {
 
     private int numPages;
 
+    private Thread readThread;
+    private Thread writeThread;
+
     public DCDStreamingCacheIterator(
             DCDStreamingTermStore parentStore, Map<Integer, RandomVariableAtom> variables,
             List<DCDObjectiveTerm> termCache, List<DCDObjectiveTerm> termPool,
-            ByteBuffer termBuffer, ByteBuffer lagrangeBuffer,
+            ByteBuffer termBuffer, ByteBuffer lagrangeReadBuffer, ByteBuffer lagrangeWriteBuffer,
             boolean shufflePage, List<Integer> shuffleMap, boolean randomizePageAccess,
             int numPages) {
         this.parentStore = parentStore;
@@ -75,7 +84,8 @@ public class DCDStreamingCacheIterator implements DCDStreamingIterator {
         this.termPool = termPool;
 
         this.termBuffer = termBuffer;
-        this.lagrangeBuffer = lagrangeBuffer;
+        this.lagrangeReadBuffer = lagrangeReadBuffer;
+        this.lagrangeWriteBuffer = lagrangeWriteBuffer;
 
         nextCachedTermIndex = 0;
 
@@ -97,6 +107,11 @@ public class DCDStreamingCacheIterator implements DCDStreamingIterator {
 
         // Note that we cannot pre-fetch.
         nextTerm = null;
+
+        readThread = null;
+        writeThread = null;
+
+        prefetchPage(currentPage + 1);
     }
 
     /**
@@ -168,6 +183,9 @@ public class DCDStreamingCacheIterator implements DCDStreamingIterator {
      * @return true if the next page was fetched and loaded (false when there are no more pages).
      */
     private boolean fetchPage() {
+        // Wait for the prefetch to complete.
+        waitForPrefetch();
+
         // Clear the existing page cache.
         termCache.clear();
 
@@ -179,43 +197,20 @@ public class DCDStreamingCacheIterator implements DCDStreamingIterator {
             return false;
         }
 
-        // Prep for the next read.
-        // Note that the termBuffer should be at maximum size from the initial round.
-        termBuffer.clear();
-        lagrangeBuffer.clear();
-
-        int termsSize = 0;
         int numTerms = 0;
-        int headerSize = (Integer.SIZE / 8) * 2;
-        int lagrangesSize = 0;
 
-        int pageIndex = pageAccessOrder.get(currentPage).intValue();
-        String termPagePath = parentStore.getTermPagePath(pageIndex);
-        String lagrangePagePath = parentStore.getLagrangePagePath(pageIndex);
+        // The buffers are ready from the prefetch,
+        // but we still need to convert the data to terms.
 
-        try (
-                FileInputStream termStream = new FileInputStream(termPagePath);
-                FileInputStream lagrangeStream = new FileInputStream(lagrangePagePath)) {
-            // First read the term size information.
-            termStream.read(termBuffer.array(), 0, headerSize);
+        // First get the term size information.
+        // We don't actually need to first int (term size) here (only in the prefetch).
+        termBuffer.getInt();
+        numTerms = termBuffer.getInt();
 
-            termsSize = termBuffer.getInt();
-            numTerms = termBuffer.getInt();
-            lagrangesSize = (Float.SIZE / 8) * numTerms;
-
-            // Now read in all the terms and lagrange values.
-            termStream.read(termBuffer.array(), headerSize, termsSize);
-            lagrangeStream.read(lagrangeBuffer.array(), 0, lagrangesSize);
-        } catch (IOException ex) {
-            throw new RuntimeException(String.format("Unable to read cache pages: [%s ; %s].", termPagePath, lagrangePagePath), ex);
-        }
-
-        // Convert all the terms from binary to objects.
-        // Use the terms from the pool.
-
+        // Pull terms out to the pool for reuse.
         for (int i = 0; i < numTerms; i++) {
             DCDObjectiveTerm term = termPool.get(i);
-            term.read(termBuffer, lagrangeBuffer, variables);
+            term.read(termBuffer, lagrangeReadBuffer, variables);
             termCache.add(term);
         }
 
@@ -227,6 +222,9 @@ public class DCDStreamingCacheIterator implements DCDStreamingIterator {
 
             RandUtils.pairedShuffle(termCache, shuffleMap);
         }
+
+        // Prefetch the next page.
+        prefetchPage(currentPage + 1);
 
         return true;
     }
@@ -242,11 +240,14 @@ public class DCDStreamingCacheIterator implements DCDStreamingIterator {
     }
 
     private void flushLagrangeCache() {
+        // Make sure that last write is complete.
+        waitForWrite();
+
         int lagrangeBufferSize = (Float.SIZE / 8) * termCache.size();
 
         // The buffer has already grown to maximum size in the initial round,
         // no need to reallocate.
-        lagrangeBuffer.clear();
+        lagrangeWriteBuffer.clear();
 
         // If this page was picked up from the cache (and not from grounding) and shuffled,
         // then we will need to use the shuffle map to write the lagrange values back in
@@ -255,22 +256,15 @@ public class DCDStreamingCacheIterator implements DCDStreamingIterator {
             for (int shuffledIndex = 0; shuffledIndex < shuffleMap.size(); shuffledIndex++) {
                 int writeIndex = shuffleMap.get(shuffledIndex);
                 DCDObjectiveTerm term = termCache.get(shuffledIndex);
-                lagrangeBuffer.putFloat(writeIndex * (Float.SIZE / 8), term.getLagrange());
+                lagrangeWriteBuffer.putFloat(writeIndex * (Float.SIZE / 8), term.getLagrange());
             }
         } else {
             for (DCDObjectiveTerm term : termCache) {
-                lagrangeBuffer.putFloat(term.getLagrange());
+                lagrangeWriteBuffer.putFloat(term.getLagrange());
             }
         }
 
-        int pageIndex = pageAccessOrder.get(currentPage).intValue();
-        String lagrangePagePath = parentStore.getLagrangePagePath(pageIndex);
-
-        try (FileOutputStream stream = new FileOutputStream(lagrangePagePath)) {
-            stream.write(lagrangeBuffer.array(), 0, lagrangeBufferSize);
-        } catch (IOException ex) {
-            throw new RuntimeException("Unable to write lagrange cache page: " + lagrangePagePath, ex);
-        }
+        asyncWrite(currentPage, lagrangeWriteBuffer, lagrangeBufferSize);
     }
 
     @Override
@@ -281,7 +275,137 @@ public class DCDStreamingCacheIterator implements DCDStreamingIterator {
         closed = true;
 
         flushCache();
+        waitForWrite();
 
         parentStore.cacheIterationComplete();
+    }
+
+    private synchronized void prefetchPage(int page) {
+        if (readThread != null) {
+            throw new IllegalStateException(String.format(
+                    "Asked to prefetch a page (%d) when there is already a prefetch in progress.",
+                    page));
+        }
+
+        if (page >= numPages) {
+            return;
+        }
+
+        int pageIndex = pageAccessOrder.get(page).intValue();
+        String termPagePath = parentStore.getTermPagePath(pageIndex);
+        String lagrangePagePath = parentStore.getLagrangePagePath(pageIndex);
+
+        readThread = new ReadWorker(termPagePath, lagrangePagePath);
+        readThread.setDaemon(true);
+        readThread.start();
+    }
+
+    private synchronized void waitForPrefetch() {
+        if (readThread == null) {
+            return;
+        }
+
+        try {
+            readThread.join();
+        } catch (InterruptedException ex) {
+            // Just log and keep going.
+            log.warn("Waiting for the prefetch thread was intrrrupted.", ex);
+        }
+
+        readThread = null;
+    }
+
+    private synchronized void asyncWrite(int page, ByteBuffer buffer, int size) {
+        if (writeThread != null) {
+            throw new IllegalStateException(String.format(
+                    "Asked to write a page (%d) when there is already a write in progress.",
+                    page));
+        }
+
+        int pageIndex = pageAccessOrder.get(page).intValue();
+        String lagrangePagePath = parentStore.getLagrangePagePath(pageIndex);
+
+        writeThread = new WriteWorker(lagrangePagePath, buffer, size);
+        writeThread.setDaemon(true);
+        writeThread.start();
+    }
+
+    private synchronized void waitForWrite() {
+        if (writeThread == null) {
+            return;
+        }
+
+        try {
+            writeThread.join();
+        } catch (InterruptedException ex) {
+            // Just log and keep going.
+            log.warn("Waiting for the write thread was intrrrupted.", ex);
+        }
+
+        writeThread = null;
+    }
+
+    private class ReadWorker extends Thread {
+        private String termPagePath;
+        private String lagrangePagePath;
+
+        public ReadWorker(String termPagePath, String lagrangePagePath) {
+            this.termPagePath = termPagePath;
+            this.lagrangePagePath = lagrangePagePath;
+        }
+
+        @Override
+        public void run() {
+            // Prep for the next read.
+            // Note that the termBuffer should be at maximum size from the initial round.
+            termBuffer.clear();
+            lagrangeReadBuffer.clear();
+
+            int termsSize = 0;
+            int numTerms = 0;
+            int headerSize = (Integer.SIZE / 8) * 2;
+            int lagrangesSize = 0;
+
+            try (
+                    FileInputStream termStream = new FileInputStream(termPagePath);
+                    FileInputStream lagrangeStream = new FileInputStream(lagrangePagePath)) {
+                // Read the term size information so we know how much to later read.
+                termStream.read(termBuffer.array(), 0, headerSize);
+
+                termsSize = termBuffer.getInt();
+                numTerms = termBuffer.getInt();
+                lagrangesSize = (Float.SIZE / 8) * numTerms;
+
+                // Now read in all the terms and lagrange values.
+                termStream.read(termBuffer.array(), headerSize, termsSize);
+                lagrangeStream.read(lagrangeReadBuffer.array(), 0, lagrangesSize);
+            } catch (IOException ex) {
+                throw new RuntimeException(String.format("Unable to read cache pages: [%s ; %s].", termPagePath, lagrangePagePath), ex);
+            }
+
+            // Reset the term buffer so it can read the header again.
+            termBuffer.position(0);
+        }
+    }
+
+    private class WriteWorker extends Thread {
+        private String path;
+        private ByteBuffer buffer;
+        private int size;
+
+        public WriteWorker(String path, ByteBuffer buffer, int size) {
+            this.path = path;
+            this.buffer = buffer;
+            this.size = size;
+        }
+
+        @Override
+        public void run() {
+            try (FileOutputStream stream = new FileOutputStream(path)) {
+                stream.write(buffer.array(), 0, size);
+            } catch (IOException ex) {
+                throw new RuntimeException("Unable to write cache page: " + path, ex);
+            }
+        }
     }
 }
