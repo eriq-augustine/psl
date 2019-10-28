@@ -88,9 +88,9 @@ import java.util.Set;
  * GroundAtoms with FunctionalPredicates.
  */
 public abstract class Database implements ReadableDatabase, WritableDatabase {
-    protected static final String THREAD_QUERY_ATOM_KEY = QueryAtom.class.getName();
-
     public static final float DEFAULT_UNOBSERVED_VALUE = 0.0f;
+
+    protected static final String THREAD_QUERY_ATOM_KEY = Database.class.getName() + "::" + QueryAtom.class.getName();
 
     /**
      * The backing data store that created this database.
@@ -191,6 +191,24 @@ public abstract class Database implements ReadableDatabase, WritableDatabase {
 
     public boolean hasAtom(StandardPredicate predicate, Constant... arguments) {
         return getAtom(predicate, false, arguments) != null;
+    }
+
+    public boolean hasCachedAtom(StandardPredicate predicate, Constant... arguments) {
+        // Only allocate one QueryAtom per thread.
+        QueryAtom queryAtom = null;
+        if (!Parallel.hasThreadObject(THREAD_QUERY_ATOM_KEY)) {
+            queryAtom = new QueryAtom(predicate, arguments);
+            Parallel.putThreadObject(THREAD_QUERY_ATOM_KEY, queryAtom);
+        } else {
+            queryAtom = (QueryAtom)(Parallel.getThreadObject(THREAD_QUERY_ATOM_KEY));
+            queryAtom.assume(predicate, arguments);
+        }
+
+        return hasCachedAtom(queryAtom);
+    }
+
+    public boolean hasCachedAtom(QueryAtom atom) {
+        return cache.getCachedAtom(atom) != null;
     }
 
     public int countAllGroundAtoms(StandardPredicate predicate) {
