@@ -15,18 +15,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.linqs.psl.database.rdbms;
+package org.linqs.psl.grounding.rewrite;
 
 import org.linqs.psl.config.Config;
 import org.linqs.psl.database.DatabaseQuery;
+import org.linqs.psl.database.rdbms.Formula2SQL;
+import org.linqs.psl.database.rdbms.RDBMSDataStore;
+import org.linqs.psl.database.rdbms.RDBMSDatabase;
 import org.linqs.psl.model.atom.Atom;
 import org.linqs.psl.model.formula.Conjunction;
 import org.linqs.psl.model.formula.Formula;
 import org.linqs.psl.model.predicate.ExternalFunctionalPredicate;
-import org.linqs.psl.model.predicate.Predicate;
 import org.linqs.psl.model.predicate.GroundingOnlyPredicate;
 import org.linqs.psl.model.predicate.StandardPredicate;
-import org.linqs.psl.model.term.Term;
 import org.linqs.psl.model.term.Variable;
 import org.linqs.psl.util.BitUtils;
 import org.linqs.psl.util.IteratorUtils;
@@ -40,12 +41,9 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.PriorityQueue;
 import java.util.Set;
-import java.util.Queue;
 
 /**
  * Try to rewrite a grounding query to make it more efficient.
@@ -121,12 +119,28 @@ public class QueryRewriter {
      * Rewrite the query to minimize the execution time while trading off query size.
      */
     public Formula rewrite(Formula baseFormula, RDBMSDatabase database) {
+        List<RewriteNode> results = new ArrayList<RewriteNode>(1);
+        rewrite(baseFormula, database, 1, results);
+        return results.get(0).formula;
+    }
+
+    /**
+     * Rewrite the query to minimize the execution time while trading off query size.
+     * Get the top n results.
+     */
+    public Collection<RewriteNode> rewrite(Formula baseFormula, RDBMSDatabase database,
+            int maxResults, Collection<RewriteNode> results) {
+        if (results == null) {
+            results = new ArrayList<RewriteNode>(0);
+        }
+
         // Once validated, we know that the formula is a conjunction or single atom.
         DatabaseQuery.validate(baseFormula);
 
         // Shortcut for priors (single atoms).
         if (baseFormula instanceof Atom) {
-            return baseFormula;
+            results.add(new RewriteNode(1, baseFormula, 0, 0));
+            return results;
         }
 
         Set<Atom> atomBuffer = baseFormula.getAtoms(new HashSet<Atom>());
@@ -206,7 +220,14 @@ public class QueryRewriter {
         log.debug("Computed cost-based query rewrite for [{}]({}): [{}]({}).",
                 baseNode.formula, baseNode.optimisticCost, bestNode.formula, bestNode.optimisticCost);
 
-        return bestNode.formula;
+        for (int i = 0; i < maxResults; i++) {
+            RewriteNode node = fringe.popBestNode();
+            if (node != null) {
+                results.add(node);
+            }
+        }
+
+        return results;
     }
 
     /**
@@ -372,147 +393,13 @@ public class QueryRewriter {
         return passthrough;
     }
 
-    private static class RewriteNode {
-        public long atomsBitSet;
-        public Formula formula;
-        public double optimisticCost;
-        public double pessimisticCost;
+    public static class QueryRewrite {
+        public double cost;
+        public Formula query;
 
-        public RewriteNode(long atomsBitSet, Formula formula, double optimisticCost, double pessimisticCost) {
-            this.atomsBitSet = atomsBitSet;
-            this.formula = formula;
-            this.optimisticCost = optimisticCost;
-            this.pessimisticCost = pessimisticCost;
-        }
-
-        public String toString() {
-            return String.format("{Atom Bits: %d, Optimistic: %f, Pessimistic: %f, Formula: %s}",
-                    atomsBitSet, optimisticCost, pessimisticCost, formula);
-        }
-    }
-
-    /**
-     * Defines the strategy for exploring the rewrite space.
-     */
-    public abstract static class RewriteFringe {
-        protected RewriteNode bestNode;
-        protected Collection<RewriteNode> fringe;
-
-        protected RewriteFringe(Collection<RewriteNode> fringe) {
-            bestNode = null;
-            this.fringe = fringe;
-        }
-
-        public int size() {
-            return fringe.size();
-        }
-
-        public void clear() {
-            bestNode = null;
-            fringe.clear();
-        }
-
-        /**
-         * Add a node to the fringe.
-         * The node will be check if it is the best on add because the search through
-         * the rewrite space may be time/cost bounded,
-         *  and we want to check for the best node as soon as we pay the estimation cost (SQL EXPLAIN).
-         */
-        public void push(RewriteNode node) {
-            // Skip invalid rewrites.
-            if (node == null) {
-                return;
-            }
-
-            if (bestNode == null || node.optimisticCost < bestNode.optimisticCost) {
-                bestNode = node;
-            }
-
-            if (pushInternal(node)) {
-                log.trace("   Accepted node.");
-            } else {
-                log.trace("   Rejected node.");
-            }
-        }
-
-        public RewriteNode getBestNode() {
-            return bestNode;
-        }
-
-        /**
-         * Actually add the node to the fringe.
-         * @return true is the node was accepted, false otherwise.
-         */
-        protected abstract boolean pushInternal(RewriteNode node);
-        public abstract RewriteNode pop();
-    }
-
-    public static class DFSRewriteFringe extends RewriteFringe {
-        public DFSRewriteFringe() {
-            super(new LinkedList<RewriteNode>());
-        }
-
-        protected boolean pushInternal(RewriteNode node) {
-            ((LinkedList<RewriteNode>)fringe).addFirst(node);
-            return true;
-        }
-
-        public RewriteNode pop() {
-            return ((LinkedList<RewriteNode>)fringe).removeFirst();
-        }
-    }
-
-    public static class BFSRewriteFringe extends RewriteFringe {
-        public BFSRewriteFringe() {
-            super(new LinkedList<RewriteNode>());
-        }
-
-        protected boolean pushInternal(RewriteNode node) {
-            ((LinkedList<RewriteNode>)fringe).addLast(node);
-            return true;
-        }
-
-        public RewriteNode pop() {
-            return ((LinkedList<RewriteNode>)fringe).removeFirst();
-        }
-    }
-
-    public static class UCSRewriteFringe extends RewriteFringe {
-        public UCSRewriteFringe() {
-            // Use a priority queue (with PriorityQueue's default size of 11.
-            super(new PriorityQueue<RewriteNode>(11, new Comparator<RewriteNode>() {
-                public int compare(RewriteNode a, RewriteNode b) {
-                    if (a.optimisticCost < b.optimisticCost) {
-                        return -1;
-                    }
-
-                    if (a.optimisticCost > b.optimisticCost) {
-                        return 1;
-                    }
-
-                    return 0;
-                }
-            }));
-        }
-
-        protected boolean pushInternal(RewriteNode node) {
-            ((PriorityQueue<RewriteNode>)fringe).add(node);
-            return true;
-        }
-
-        public RewriteNode pop() {
-            return ((PriorityQueue<RewriteNode>)fringe).poll();
-        }
-    }
-
-    public static class BoundedRewriteFringe extends UCSRewriteFringe {
-        @Override
-        protected boolean pushInternal(RewriteNode node) {
-            if (node.optimisticCost > bestNode.pessimisticCost) {
-                return false;
-            }
-
-            return super.pushInternal(node);
+        public QueryRewrite(double cost, Formula query) {
+            this.cost = cost;
+            this.query = query;
         }
     }
 }

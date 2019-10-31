@@ -22,9 +22,10 @@ import org.linqs.psl.database.DataStore;
 import org.linqs.psl.database.QueryResultIterable;
 import org.linqs.psl.database.atom.AtomManager;
 import org.linqs.psl.database.rdbms.Formula2SQL;
-import org.linqs.psl.database.rdbms.QueryRewriter;
 import org.linqs.psl.database.rdbms.RDBMSDataStore;
 import org.linqs.psl.database.rdbms.RDBMSDatabase;
+import org.linqs.psl.grounding.rewrite.RewriteNode;
+import org.linqs.psl.grounding.rewrite.QueryRewriter;
 import org.linqs.psl.model.Model;
 import org.linqs.psl.model.atom.Atom;
 import org.linqs.psl.model.formula.Formula;
@@ -82,6 +83,12 @@ public class Grounding {
     public static final String EXPERIMENT_SKIP_INFERENCE_KEY = CONFIG_PREFIX + ".experiment.skipinference";
     public static final boolean EXPERIMENT_SKIP_INFERENCE_DEFAULT = false;
 
+    public static final String EXPERIMENT_SHARING_KEY = CONFIG_PREFIX + ".experiment.sharing";
+    public static final boolean EXPERIMENT_SHARING_DEFAULT = false;
+
+    public static final String QUERIES_PER_RULE_KEY = CONFIG_PREFIX + ".queriesperrule";
+    public static final int QUERIES_PER_RULE_DEFAULT = 3;
+
     /**
      * The specific rules and rewrites to run.
      * "rule:rewrite;...".
@@ -132,6 +139,11 @@ public class Grounding {
      * @return the number of ground rules generated.
      */
     public static int groundAll(List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
+        boolean experimentalSharing = Config.getBoolean(EXPERIMENT_SHARING_KEY, EXPERIMENT_SHARING_DEFAULT);
+        if (experimentalSharing) {
+            return experimentalSharingGroundAll(rules, atomManager, groundRuleStore);
+        }
+
         boolean rewrite = Config.getBoolean(REWRITE_QUERY_KEY, REWRITE_QUERY_DEFAULT);
         boolean serial = Config.getBoolean(SERIAL_KEY, SERIAL_DEFAULT);
         boolean eagerInstantiation = Config.getBoolean(EAGER_INSTANTIATION_KEY, EAGER_INSTANTIATION_DEFAULT);
@@ -190,6 +202,71 @@ public class Grounding {
         groundAllSerial(bypassRules, atomManager, groundRuleStore);
 
         return groundRuleStore.size() - initialSize;
+    }
+
+    public static int experimentalSharingGroundAll(List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
+        int maxQueriesPerRule = Config.getInt(QUERIES_PER_RULE_KEY, QUERIES_PER_RULE_DEFAULT);
+
+        List<Rule> rewriteRules = new ArrayList<Rule>();
+        List<Rule> bypassRules = new ArrayList<Rule>();
+
+        List<RewriteNode> rewrites = new ArrayList<RewriteNode>();
+
+        DataStore dataStore = atomManager.getDatabase().getDataStore();
+
+        QueryRewriter rewriter = new QueryRewriter();
+
+        for (Rule rule : rules) {
+            if (!rule.supportsGroundingQueryRewriting()) {
+                bypassRules.add(rule);
+                continue;
+            }
+
+            rewriteRules.add(rule);
+
+            // TEST
+            int oldSize = rewrites.size();
+
+            Formula baseQuery = rule.getRewritableGroundingFormula(atomManager);
+            rewriter.rewrite(baseQuery, (RDBMSDatabase)atomManager.getDatabase(), maxQueriesPerRule, rewrites);
+
+            // TEST
+            System.out.println("Rule: " + rule);
+            for (int i = oldSize; i < rewrites.size(); i++) {
+                System.out.println("    Rewrite: " + rewrites.get(i));
+            }
+        }
+
+
+
+        /* TEST
+        int initialSize = groundRuleStore.size();
+
+        // First perform all the rewritten querties.
+        for (Map.Entry<Formula, List<Rule>> entry : queries.entrySet()) {
+            if (!serial) {
+                // If parallel, ground all the rules that match this formula at once.
+                groundParallel(entry.getKey(), entry.getValue(), atomManager, groundRuleStore);
+            } else {
+                // If serial, ground the rules with this formula one at a time.
+                for (Rule rule : entry.getValue()) {
+                    List<Rule> tempRules = new ArrayList<Rule>();
+                    tempRules.add(rule);
+
+                    groundParallel(entry.getKey(), tempRules, atomManager, groundRuleStore);
+                }
+            }
+        }
+
+        // Now ground the bypassed rules.
+        groundAllSerial(bypassRules, atomManager, groundRuleStore);
+
+        return groundRuleStore.size() - initialSize;
+        */
+
+        // TEST
+        System.exit(0);
+        return 0;
     }
 
     /**
