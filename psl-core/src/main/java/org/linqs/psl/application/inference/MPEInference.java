@@ -46,10 +46,6 @@ public class MPEInference extends InferenceApplication {
 
     @Override
     protected void completeInitialize() {
-        log.debug("Creating persisted atom mannager.");
-        atomManager = new PersistedAtomManager(db);
-        log.trace("Atom manager initialization complete.");
-
         log.info("Grounding out model.");
 
         if (Config.getBoolean(Grounding.EXPERIMENT_KEY, Grounding.EXPERIMENT_DEFAULT)) {
@@ -66,27 +62,9 @@ public class MPEInference extends InferenceApplication {
             return;
         }
 
-        termStore.ensureVariableCapacity(atomManager.getCachedRVACount());
-
         log.debug("Initializing objective terms for {} ground rules.", groundCount);
         @SuppressWarnings("unchecked")
         int termCount = termGenerator.generateTerms(groundRuleStore, termStore);
         log.debug("Generated {} objective terms from {} ground rules.", termCount, groundCount);
-    }
-
-    @Override
-    public void inference() {
-        if (Config.getBoolean(Grounding.EXPERIMENT_SKIP_INFERENCE_KEY, Grounding.EXPERIMENT_SKIP_INFERENCE_DEFAULT)) {
-            log.info("Skipping inference for grounding experiments.");
-            return;
-        }
-
-        log.info("Beginning inference.");
-        reasoner.optimize(termStore);
-        log.info("Inference complete. Writing results to Database.");
-
-        // Commits the RandomVariableAtoms back to the Database,
-        ((PersistedAtomManager)atomManager).commitPersistedAtoms();
-        log.info("Results committed to database.");
     }
 }
