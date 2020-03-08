@@ -20,6 +20,7 @@ package org.linqs.psl.model.rule;
 import org.linqs.psl.database.atom.AtomManager;
 import org.linqs.psl.database.rdbms.RawQuery;
 import org.linqs.psl.grounding.GroundRuleStore;
+import org.linqs.psl.model.atom.Atom;
 import org.linqs.psl.model.formula.Formula;
 import org.linqs.psl.model.term.Constant;
 import org.linqs.psl.model.term.Variable;
@@ -93,4 +94,9 @@ public interface Rule {
      * as the pre-split rule.
      */
     public List<Rule> split();
+
+    /**
+     * Get all the atoms used in this rule in no particular order.
+     */
+    public Iterable<Atom> getAtoms();
 }

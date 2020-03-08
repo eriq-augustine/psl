@@ -25,7 +25,6 @@ import org.linqs.psl.database.Partition;
 import org.linqs.psl.database.ResultList;
 import org.linqs.psl.database.QueryResultIterable;
 import org.linqs.psl.database.atom.AtomCache;
-import org.linqs.psl.grounding.Grounding;
 import org.linqs.psl.model.atom.GroundAtom;
 import org.linqs.psl.model.atom.ObservedAtom;
 import org.linqs.psl.model.atom.QueryAtom;
@@ -339,10 +338,6 @@ public class RDBMSDatabase extends Database {
         }
 
         log.trace(queryString);
-
-        if (Config.getBoolean(Grounding.EXPERIMENT_KEY, Grounding.EXPERIMENT_DEFAULT)) {
-            ((RDBMSDataStore)parentDataStore).explain(queryString);
-        }
 
         return new RDBMSQueryResultIterable(queryString, projectionMap, orderedIndexes, orderedTypes);
     }

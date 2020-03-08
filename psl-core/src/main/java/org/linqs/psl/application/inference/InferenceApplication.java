@@ -22,7 +22,7 @@ import org.linqs.psl.config.Config;
 import org.linqs.psl.database.Database;
 import org.linqs.psl.database.atom.PersistedAtomManager;
 import org.linqs.psl.grounding.GroundRuleStore;
-import org.linqs.psl.grounding.Grounding;
+import org.linqs.psl.grounding.SingleRuleExperiment;
 import org.linqs.psl.grounding.MemoryGroundRuleStore;
 import org.linqs.psl.model.Model;
 import org.linqs.psl.reasoner.Reasoner;
@@ -150,7 +150,7 @@ public abstract class InferenceApplication implements ModelApplication {
      * All RandomVariableAtoms which the Model might access must be persisted in the Database.
      */
     public void inference(boolean commitAtoms) {
-        if (Config.getBoolean(Grounding.EXPERIMENT_SKIP_INFERENCE_KEY, Grounding.EXPERIMENT_SKIP_INFERENCE_DEFAULT)) {
+        if (Config.getBoolean(SingleRuleExperiment.EXPERIMENT_KEY, SingleRuleExperiment.EXPERIMENT_DEFAULT)) {
             log.info("Skipping inference for grounding experiments.");
             return;
         }

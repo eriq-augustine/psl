@@ -63,49 +63,17 @@ public class Grounding {
     public static final String REWRITE_QUERY_KEY = CONFIG_PREFIX + ".rewritequeries";
     public static final boolean REWRITE_QUERY_DEFAULT = false;
 
-    /**
-     * Whether or not queries are being rewritten, perform the grounding queries one at a time.
-     */
-    public static final String SERIAL_KEY = CONFIG_PREFIX + ".serial";
-    public static final boolean SERIAL_DEFAULT = false;
-
-    /**
-     * Whether or not to start instantiating ground rules as query results stream in,
-     * instead of waiting for them all the show up.
-     * TODO(eriq): Will be true in real code.
-     */
-    public static final String EAGER_INSTANTIATION_KEY = CONFIG_PREFIX + ".eagerinstantiation";
-    public static final boolean EAGER_INSTANTIATION_DEFAULT = false;
-
-    public static final String EXPERIMENT_KEY = CONFIG_PREFIX + ".experiment";
-    public static final boolean EXPERIMENT_DEFAULT = false;
-
-    public static final String EXPERIMENT_SKIP_INFERENCE_KEY = CONFIG_PREFIX + ".experiment.skipinference";
-    public static final boolean EXPERIMENT_SKIP_INFERENCE_DEFAULT = false;
-
-    public static final String EXPERIMENT_SHARING_KEY = CONFIG_PREFIX + ".experiment.sharing";
-    public static final boolean EXPERIMENT_SHARING_DEFAULT = false;
+    public static final String SHARING_KEY = CONFIG_PREFIX + ".sharequeries";
+    public static final boolean SHARING_DEFAULT = false;
 
     public static final String QUERIES_PER_RULE_KEY = CONFIG_PREFIX + ".queriesperrule";
     public static final int QUERIES_PER_RULE_DEFAULT = 3;
 
     /**
-     * The specific rules and rewrites to run.
-     * "rule:rewrite;...".
-     * QUERY_VIEW_ALL_VALUE value if you want to get all the rewrites printed.
+     * Whether or not queries are being rewritten, perform the grounding queries one at a time.
      */
-    public static final String EXPERIMENT_RULE_QUERIES_KEY = CONFIG_PREFIX + ".experiment.rulequeries";
-    public static final String EXPERIMENT_RULE_QUERIES_DEFAULT = "";
-
-    /**
-     * For each rule, run a full estimation (descend the entire search tree).
-     */
-    public static final String EXPERIMENT_FULL_ESTIMATE_KEY = CONFIG_PREFIX + ".experiment.fullestimate";
-    public static final boolean EXPERIMENT_FULL_ESTIMATE_DEFAULT = false;
-
-    public static final String RULE_DELIM = "_";
-    public static final String QUERY_DELIM = ":";
-    public static final int QUERY_VIEW_ALL_VALUE = -1;
+    public static final String SERIAL_KEY = CONFIG_PREFIX + ".serial";
+    public static final boolean SERIAL_DEFAULT = false;
 
     public static final int PARALLEL_WORKER_QUEUE_SIZE = 1000;
 
@@ -139,14 +107,12 @@ public class Grounding {
      * @return the number of ground rules generated.
      */
     public static int groundAll(List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
-        boolean experimentalSharing = Config.getBoolean(EXPERIMENT_SHARING_KEY, EXPERIMENT_SHARING_DEFAULT);
-        if (experimentalSharing) {
-            return experimentalSharingGroundAll(rules, atomManager, groundRuleStore);
+        if (Config.getBoolean(SHARING_KEY, SHARING_DEFAULT)) {
+            return sharingGroundAll(rules, atomManager, groundRuleStore);
         }
 
         boolean rewrite = Config.getBoolean(REWRITE_QUERY_KEY, REWRITE_QUERY_DEFAULT);
         boolean serial = Config.getBoolean(SERIAL_KEY, SERIAL_DEFAULT);
-        boolean eagerInstantiation = Config.getBoolean(EAGER_INSTANTIATION_KEY, EAGER_INSTANTIATION_DEFAULT);
 
         Map<Formula, List<Rule>> queries = new HashMap<Formula, List<Rule>>();
         List<Rule> bypassRules = new ArrayList<Rule>();
@@ -186,14 +152,14 @@ public class Grounding {
         for (Map.Entry<Formula, List<Rule>> entry : queries.entrySet()) {
             if (!serial) {
                 // If parallel, ground all the rules that match this formula at once.
-                groundParallel(entry.getKey(), entry.getValue(), atomManager, groundRuleStore, eagerInstantiation);
+                groundParallel(entry.getKey(), entry.getValue(), atomManager, groundRuleStore);
             } else {
                 // If serial, ground the rules with this formula one at a time.
                 for (Rule rule : entry.getValue()) {
                     List<Rule> tempRules = new ArrayList<Rule>();
                     tempRules.add(rule);
 
-                    groundParallel(entry.getKey(), tempRules, atomManager, groundRuleStore, eagerInstantiation);
+                    groundParallel(entry.getKey(), tempRules, atomManager, groundRuleStore);
                 }
             }
         }
@@ -204,7 +170,7 @@ public class Grounding {
         return groundRuleStore.size() - initialSize;
     }
 
-    public static int experimentalSharingGroundAll(List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
+    private static int sharingGroundAll(List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
         int maxQueriesPerRule = Config.getInt(QUERIES_PER_RULE_KEY, QUERIES_PER_RULE_DEFAULT);
 
         List<Rule> rewriteRules = new ArrayList<Rule>();
@@ -269,121 +235,11 @@ public class Grounding {
         return 0;
     }
 
-    /**
-     * Experiment only.
-     * Run rewites of specific rules (chosen by EXPERIMENT_RULE_QUERIES_KEY).
-     */
-    public static void groundingExperiment(List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
-        String ruleQueriesString = Config.getString(EXPERIMENT_RULE_QUERIES_KEY, EXPERIMENT_RULE_QUERIES_DEFAULT);
-        boolean fullEstimate = Config.getBoolean(EXPERIMENT_FULL_ESTIMATE_KEY, EXPERIMENT_FULL_ESTIMATE_DEFAULT);
-        String[] ruleQueries = ruleQueriesString.split(RULE_DELIM);
-
-        Parallel.initPool();
-
-        log.info("Grounding experiment total available rules: {}", rules.size());
-
-        if (ruleQueries.length == 0) {
-            return;
-        }
-
-        DataStore dataStore = atomManager.getDatabase().getDataStore();
-        QueryRewriter rewriter = new QueryRewriter();
-
-        for (String ruleQuery : ruleQueries) {
-            int[] values = StringUtils.splitInt(ruleQuery, QUERY_DELIM);
-            int ruleIndex = values[0];
-            int queryIndex = values[1];
-
-            Rule rule = rules.get(ruleIndex);
-
-            singleGroundingExperiment(rule, ruleIndex, queryIndex, atomManager, groundRuleStore, dataStore, rewriter, fullEstimate);
-        }
+    private static int groundParallel(Formula query, List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore) {
+        return groundParallel(query, rules, atomManager, groundRuleStore, true);
     }
 
-    private static void singleGroundingExperiment(Rule rule, int ruleIndex, int queryToGround,
-            AtomManager atomManager, GroundRuleStore groundRuleStore,
-            DataStore dataStore, QueryRewriter rewriter,
-            boolean fullEstimate) {
-        log.info("Grounding experiment on rule {} -- {}", ruleIndex, rule);
-
-        List<Formula> queries = rewriter.allCandidates(rule.getRewritableGroundingFormula(atomManager));
-
-        // Get a consistent ordering of all the queries.
-        List<String> queryKeys = new ArrayList<String>();
-        Map<String, Formula> queryMapping = new HashMap<String, Formula>();
-        Map<String, Integer> atomCounts = new HashMap<String, Integer>();
-
-        for (Formula query : queries) {
-            String key = StringUtils.sort(query.toString());
-
-            int atomCount = 0;
-            for (Atom atom : query.getAtoms(new HashSet<Atom>())) {
-                if (atom.getPredicate() instanceof StandardPredicate) {
-                    atomCount++;
-                }
-            }
-
-            key = String.format("%03d -- %s", atomCount, key);
-
-            queryKeys.add(key);
-            queryMapping.put(key, query);
-            atomCounts.put(key, atomCount);
-        }
-
-        Collections.sort(queryKeys);
-        Collections.reverse(queryKeys);
-
-        log.info("Found {} candidate queries.", queries.size());
-
-        if (queryToGround != QUERY_VIEW_ALL_VALUE && (queryToGround < 0 || queryToGround > queries.size())) {
-            throw new RuntimeException("Bad value for query (rewrite), got: " + queryToGround);
-        }
-
-        if (fullEstimate) {
-            log.info("Estimating full search space.");
-            List<String> row = new ArrayList<String>();
-
-            row.add("Index");
-            row.add("Query");
-            row.add("Count");
-            row.add("Cost");
-            row.add("Rows");
-            log.info("FullEstimate -- " + ListUtils.join("\t", row));
-
-            for (int i = 0; i < queryKeys.size(); i++) {
-                row.clear();
-
-                String sql = Formula2SQL.getQuery(queryMapping.get(queryKeys.get(i)), (RDBMSDatabase)atomManager.getDatabase(), false);
-                RDBMSDataStore.ExplainResult result = ((RDBMSDataStore)dataStore).explain(sql);
-
-                row.add("" + i);
-                row.add(queryMapping.get(queryKeys.get(i)).toString());
-                row.add(atomCounts.get(queryKeys.get(i)).toString());
-                row.add("" + result.totalCost);
-                row.add("" + result.rows);
-                log.info("FullEstimate -- " + ListUtils.join("\t", row));
-            }
-        }
-
-        if (queryToGround == QUERY_VIEW_ALL_VALUE) {
-            for (int i = 0; i < queryKeys.size(); i++) {
-                log.info("   {} -- {}", i, queryMapping.get(queryKeys.get(i)));
-            }
-        } else {
-            Formula query = queryMapping.get(queryKeys.get(queryToGround));
-            Integer atomCount = atomCounts.get(queryKeys.get(queryToGround));
-
-            log.info("Query {} -- Formula: {}", queryToGround, query);
-            log.info("Query {} -- Atom Count: {}", queryToGround, atomCount);
-
-            List<Rule> tempRules = new ArrayList<Rule>();
-            tempRules.add(rule);
-
-            groundParallel(query, tempRules, atomManager, groundRuleStore, false);
-        }
-    }
-
-    private static int groundParallel(Formula query, List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore, boolean eagerInstantiation) {
+    protected static int groundParallel(Formula query, List<Rule> rules, AtomManager atomManager, GroundRuleStore groundRuleStore, boolean eagerInstantiation) {
         log.debug("Grounding {} rule(s) with query: [{}].", rules.size(), query);
         for (Rule rule : rules) {
             log.trace("    " + rule);

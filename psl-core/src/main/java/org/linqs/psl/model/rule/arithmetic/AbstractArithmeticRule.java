@@ -55,6 +55,7 @@ import org.linqs.psl.model.term.Term;
 import org.linqs.psl.model.term.Variable;
 import org.linqs.psl.model.term.VariableTypeMap;
 import org.linqs.psl.reasoner.function.FunctionComparator;
+import org.linqs.psl.util.IteratorUtils;
 import org.linqs.psl.util.Parallel;
 
 import com.healthmarketscience.sqlbuilder.BinaryCondition;
@@ -212,6 +213,18 @@ public abstract class AbstractArithmeticRule extends AbstractRule {
     @Override
     public int hashCode() {
         return expression.hashCode();
+    }
+
+    @Override
+    public Iterable<Atom> getAtoms() {
+        return IteratorUtils.map(expression.getAtoms(), new IteratorUtils.MapFunction<SummationAtomOrAtom, Atom>() {
+            public Atom map(SummationAtomOrAtom atom) {
+                if (atom instanceof SummationAtom) {
+                    return ((SummationAtom)atom).getQueryAtom();
+                }
+                return (Atom)atom;
+            }
+        });
     }
 
     @Override

@@ -200,6 +200,13 @@ public abstract class AbstractLogicalRule extends AbstractRule {
     }
 
     @Override
+    public Iterable<Atom> getAtoms() {
+        Set<Atom> atoms = new HashSet<Atom>();
+        formula.getAtoms(atoms);
+        return atoms;
+    }
+
+    @Override
     public boolean equals(Object other) {
         if (this == other) {
             return true;

@@ -23,6 +23,7 @@ import org.linqs.psl.database.atom.PersistedAtomManager;
 import org.linqs.psl.grounding.GroundRuleStore;
 import org.linqs.psl.grounding.GroundRules;
 import org.linqs.psl.grounding.Grounding;
+import org.linqs.psl.grounding.SingleRuleExperiment;
 import org.linqs.psl.model.Model;
 import org.linqs.psl.reasoner.admm.term.ADMMTermStore;
 
@@ -48,8 +49,8 @@ public class MPEInference extends InferenceApplication {
     protected void completeInitialize() {
         log.info("Grounding out model.");
 
-        if (Config.getBoolean(Grounding.EXPERIMENT_KEY, Grounding.EXPERIMENT_DEFAULT)) {
-            Grounding.groundingExperiment(model.getRules(), atomManager, groundRuleStore);
+        if (Config.getBoolean(SingleRuleExperiment.EXPERIMENT_KEY, SingleRuleExperiment.EXPERIMENT_DEFAULT)) {
+            SingleRuleExperiment.run(model.getRules(), atomManager, groundRuleStore);
             log.info("Grounding experiment complete. Skipping term gen.");
             return;
         }
@@ -57,7 +58,7 @@ public class MPEInference extends InferenceApplication {
         int groundCount = Grounding.groundAll(model, atomManager, groundRuleStore);
         log.info("Grounding complete.");
 
-        if (Config.getBoolean(Grounding.EXPERIMENT_SKIP_INFERENCE_KEY, Grounding.EXPERIMENT_SKIP_INFERENCE_DEFAULT)) {
+        if (Config.getBoolean(SingleRuleExperiment.EXPERIMENT_KEY, SingleRuleExperiment.EXPERIMENT_DEFAULT)) {
             log.info("Skipping term generation for grounding experiments.");
             return;
         }
