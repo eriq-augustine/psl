@@ -1,7 +1,7 @@
 /*
  * This file is part of the PSL software.
  * Copyright 2011-2015 University of Maryland
- * Copyright 2013-2019 The Regents of the University of California
+ * Copyright 2013-2020 The Regents of the University of California
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -45,7 +45,7 @@ import java.util.Properties;
 import java.util.Map;
 
 /**
- * Load the command line options into PSL Config's configuration values and 
+ * Load the command line options into PSL Config's configuration values and
  * log4j configuration appropriately. This is done by instatiating the object
  * of type CommandLine and object log of type Logger.
  */
@@ -101,8 +101,8 @@ public class CommandLineLoader {
             ex.printStackTrace(System.err);
         }
 
-		this.log = initLogger();
-		initConfig();
+        this.log = initLogger();
+        initConfig();
     }
 
     /**

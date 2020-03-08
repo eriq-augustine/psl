@@ -1,7 +1,7 @@
 /*
  * This file is part of the PSL software.
  * Copyright 2011-2015 University of Maryland
- * Copyright 2013-2019 The Regents of the University of California
+ * Copyright 2013-2020 The Regents of the University of California
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -229,7 +229,7 @@ public class ADMMReasoner implements Reasoner {
         ObjectiveResult oldObjective = null;
 
         if (log.isTraceEnabled()) {
-            objective = computeObjective(termStore);
+            objective = computeObjective(termStore, false);
             log.trace(
                     "Iteration {} -- Objective: {}, Feasible: {}.",
                     0, objective.objective, (objective.violatedConstraints == 0));
@@ -268,7 +268,7 @@ public class ADMMReasoner implements Reasoner {
                             iteration, primalRes, dualRes, epsilonPrimal, epsilonDual);
                 } else {
                     oldObjective = objective;
-                    objective = computeObjective(termStore);
+                    objective = computeObjective(termStore, false);
 
                     log.trace(
                             "Iteration {} -- Objective: {}, Feasible: {}, Primal: {}, Dual: {}, Epsilon Primal: {}, Epsilon Dual: {}.",
@@ -280,7 +280,7 @@ public class ADMMReasoner implements Reasoner {
             iteration++;
         }
 
-        objective = computeObjective(termStore);
+        objective = computeObjective(termStore, true);
 
         if (objective.violatedConstraints > 0) {
             log.warn("No feasible solution found. {} constraints violated.", objective.violatedConstraints);
@@ -345,7 +345,7 @@ public class ADMMReasoner implements Reasoner {
         }
     }
 
-    private ObjectiveResult computeObjective(ADMMTermStore termStore) {
+    private ObjectiveResult computeObjective(ADMMTermStore termStore, boolean logViolatedConstraints) {
         float objective = 0.0f;
         int violatedConstraints = 0;
 
@@ -353,6 +353,10 @@ public class ADMMReasoner implements Reasoner {
             if (term instanceof LinearConstraintTerm) {
                 if (term.evaluate(consensusValues) > 0.0f) {
                     violatedConstraints++;
+
+                    if (logViolatedConstraints) {
+                        log.trace("Violated constraint: {}", term.getGroundRule());
+                    }
                 }
             } else {
                 objective += term.evaluate(consensusValues);

@@ -1,7 +1,7 @@
 /*
  * This file is part of the PSL software.
  * Copyright 2011-2015 University of Maryland
- * Copyright 2013-2019 The Regents of the University of California
+ * Copyright 2013-2020 The Regents of the University of California
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -129,7 +129,6 @@ public class Launcher {
 
     /**
      * Possible output the ground rules.
-     * 
      * @param path where to output the ground rules. Use stdout if null.
      */
     private void outputGroundRules(GroundRuleStore groundRuleStore, String path, boolean includeSatisfaction) {
@@ -321,7 +320,6 @@ public class Launcher {
 
     /**
      * Run eval.
-     * 
      * @param predictionDatabase can be passed in to speed up evaluation. If null, one will be created and closed internally.
      */
     private void evaluation(DataStore dataStore, Database predictionDatabase, Set<StandardPredicate> closedPredicates, String evalClassName) {

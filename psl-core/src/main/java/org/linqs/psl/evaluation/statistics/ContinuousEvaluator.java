@@ -1,7 +1,7 @@
 /*
  * This file is part of the PSL software.
  * Copyright 2011-2015 University of Maryland
- * Copyright 2013-2019 The Regents of the University of California
+ * Copyright 2013-2020 The Regents of the University of California
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -82,7 +82,7 @@ public class ContinuousEvaluator extends Evaluator {
         absoluteError = 0.0;
         squaredError = 0.0;
 
-        for (Map.Entry<GroundAtom, GroundAtom> entry : trainingMap.getFullMap()) {
+        for (Map.Entry<RandomVariableAtom, ObservedAtom> entry : trainingMap.getLabelMap().entrySet()) {
             if (predicate != null && entry.getKey().getPredicate() != predicate) {
                 continue;
             }

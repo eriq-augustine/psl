@@ -1,7 +1,7 @@
 /*
  * This file is part of the PSL software.
  * Copyright 2011-2015 University of Maryland
- * Copyright 2013-2019 The Regents of the University of California
+ * Copyright 2013-2020 The Regents of the University of California
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -103,7 +103,7 @@ public class CoefficientTest {
          if (!(simple instanceof ConstantNumber)) {
             fail(String.format("Expecting a ConstantNumber, found a %s.", simple.getClass().getName()));
          }
-         
+
             double actual = ((ConstantNumber)simple).value;
             assertEquals(
                 String.format("Value mismatch on coefficient %d (%s). Expected [%f], found [%f]", i, raw[i], expected[i], actual),

@@ -1,7 +1,7 @@
 /*
  * This file is part of the PSL software.
  * Copyright 2011-2015 University of Maryland
- * Copyright 2013-2019 The Regents of the University of California
+ * Copyright 2013-2020 The Regents of the University of California
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -73,9 +73,8 @@ public abstract class BaseGridSearch extends WeightLearningApplication {
         this(model.getRules(), rvDB, observedDB);
     }
 
-    // TODO(eriq): Latent variables?
     public BaseGridSearch(List<Rule> rules, Database rvDB, Database observedDB) {
-        super(rules, rvDB, observedDB, false);
+        super(rules, rvDB, observedDB);
 
         currentLocation = null;
 
@@ -113,7 +112,6 @@ public abstract class BaseGridSearch extends WeightLearningApplication {
 
             // The weights have changed, so we are no longer in an MPE state.
             inMPEState = false;
-            inLatentMPEState = false;
 
             double objective = inspectLocation(weights);
 
@@ -137,7 +135,6 @@ public abstract class BaseGridSearch extends WeightLearningApplication {
 
         // The weights have changed, so we are no longer in an MPE state.
         inMPEState = false;
-        inLatentMPEState = false;
     }
 
     /**

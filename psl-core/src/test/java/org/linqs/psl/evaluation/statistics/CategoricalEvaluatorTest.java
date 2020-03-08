@@ -1,7 +1,7 @@
 /*
  * This file is part of the PSL software.
  * Copyright 2011-2015 University of Maryland
- * Copyright 2013-2019 The Regents of the University of California
+ * Copyright 2013-2020 The Regents of the University of California
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ import org.junit.Test;
 // TODO(eriq): All the data needs to be reworked for this test.
 public class CategoricalEvaluatorTest extends EvaluatorTest<CategoricalEvaluator> {
     @Override
-    protected CategoricalEvaluator getComputer() {
+    protected CategoricalEvaluator getEvaluator() {
         return new CategoricalEvaluator();
     }
 

@@ -1,7 +1,7 @@
 /*
  * This file is part of the PSL software.
  * Copyright 2011-2015 University of Maryland
- * Copyright 2013-2019 The Regents of the University of California
+ * Copyright 2013-2020 The Regents of the University of California
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -158,9 +158,8 @@ public abstract class VotedPerceptron extends WeightLearningApplication {
      */
     private double currentLoss;
 
-    public VotedPerceptron(List<Rule> rules, Database rvDB, Database observedDB,
-            boolean supportsLatentVariables) {
-        super(rules, rvDB, observedDB, supportsLatentVariables);
+    public VotedPerceptron(List<Rule> rules, Database rvDB, Database observedDB) {
+        super(rules, rvDB, observedDB);
 
         baseStepSize = Config.getDouble(STEP_SIZE_KEY, STEP_SIZE_DEFAULT);
         if (baseStepSize <= 0) {
@@ -196,6 +195,19 @@ public abstract class VotedPerceptron extends WeightLearningApplication {
         cutObjective = Config.getBoolean(CUT_OBJECTIVE_KEY, CUT_OBJECTIVE_DEFAULT);
 
         currentLoss = Double.NaN;
+    }
+
+    protected void postInitGroundModel() {
+        if (trainingMap.getLatentVariables().size() > 0) {
+            log.warn("Latent variable(s) found when using a VotedPerceptron-based weight learning method ({})."
+                    + " VotedPerceptron uses gradients to update weights, but latent variables may make the gradients less accurate."
+                    + " Weight learning may still perform sufficiently."
+                    + " Found {} latent variables."
+                    + " Example latent variable: [{}].",
+                    this.getClass().getName(),
+                    trainingMap.getLatentVariables().size(),
+                    trainingMap.getLatentVariables().get(0));
+        }
     }
 
     @Override
@@ -281,7 +293,6 @@ public abstract class VotedPerceptron extends WeightLearningApplication {
             }
 
             inMPEState = false;
-            inLatentMPEState = false;
 
             norm = Math.sqrt(norm);
 

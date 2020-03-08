@@ -1,7 +1,7 @@
 /*
  * This file is part of the PSL software.
  * Copyright 2011-2015 University of Maryland
- * Copyright 2013-2019 The Regents of the University of California
+ * Copyright 2013-2020 The Regents of the University of California
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@ import java.lang.reflect.InvocationTargetException;
 
 public abstract class InferenceApplication implements ModelApplication {
     private static final Logger log = LoggerFactory.getLogger(InferenceApplication.class);
-    
+
     /**
      * Prefix of property keys used by this class.
      */
